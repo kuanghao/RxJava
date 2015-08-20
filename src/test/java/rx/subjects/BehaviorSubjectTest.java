@@ -16,6 +16,10 @@
 package rx.subjects;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
@@ -23,14 +27,20 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
-import org.junit.Test;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
+
+import org.junit.*;
 import org.mockito.InOrder;
 import org.mockito.Mockito;
 
-import rx.Observable;
-import rx.Observer;
-import rx.Subscription;
-import rx.functions.Func1;
+import rx.*;
+import rx.exceptions.CompositeException;
+import rx.exceptions.OnErrorNotImplementedException;
+import rx.exceptions.TestException;
+import rx.functions.*;
+import rx.observers.TestSubscriber;
+import rx.schedulers.Schedulers;
 
 public class BehaviorSubjectTest {
 
@@ -366,5 +376,212 @@ public class BehaviorSubjectTest {
         verify(o, never()).onError(any(Throwable.class));
         
         assertEquals(0, source.subscriberCount());
+        assertFalse(source.hasObservers());
+    }
+    
+    @Test
+    public void testOnErrorThrowsDoesntPreventDelivery() {
+        BehaviorSubject<String> ps = BehaviorSubject.create();
+
+        ps.subscribe();
+        TestSubscriber<String> ts = new TestSubscriber<String>();
+        ps.subscribe(ts);
+
+        try {
+            ps.onError(new RuntimeException("an exception"));
+            fail("expect OnErrorNotImplementedException");
+        } catch (OnErrorNotImplementedException e) {
+            // ignore
+        }
+        // even though the onError above throws we should still receive it on the other subscriber 
+        assertEquals(1, ts.getOnErrorEvents().size());
+    }
+    
+    /**
+     * This one has multiple failures so should get a CompositeException
+     */
+    @Test
+    public void testOnErrorThrowsDoesntPreventDelivery2() {
+        BehaviorSubject<String> ps = BehaviorSubject.create();
+
+        ps.subscribe();
+        ps.subscribe();
+        TestSubscriber<String> ts = new TestSubscriber<String>();
+        ps.subscribe(ts);
+        ps.subscribe();
+        ps.subscribe();
+        ps.subscribe();
+
+        try {
+            ps.onError(new RuntimeException("an exception"));
+            fail("expect OnErrorNotImplementedException");
+        } catch (CompositeException e) {
+            // we should have 5 of them
+            assertEquals(5, e.getExceptions().size());
+        }
+        // even though the onError above throws we should still receive it on the other subscriber 
+        assertEquals(1, ts.getOnErrorEvents().size());
+    }
+    @Test
+    public void testEmissionSubscriptionRace() throws Exception {
+        Scheduler s = Schedulers.io();
+        Scheduler.Worker worker = Schedulers.io().createWorker();
+        try {
+            for (int i = 0; i < 50000; i++) {
+                if (i % 1000 == 0) {
+                    System.out.println(i);
+                }
+                final BehaviorSubject<Object> rs = BehaviorSubject.create();
+                
+                final CountDownLatch finish = new CountDownLatch(1); 
+                final CountDownLatch start = new CountDownLatch(1); 
+                
+                worker.schedule(new Action0() {
+                    @Override
+                    public void call() {
+                        try {
+                            start.await();
+                        } catch (Exception e1) {
+                            e1.printStackTrace();
+                        }
+                        rs.onNext(1);
+                    }
+                });
+                
+                final AtomicReference<Object> o = new AtomicReference<Object>();
+                
+                rs.subscribeOn(s).observeOn(Schedulers.io())
+                .subscribe(new Observer<Object>() {
+    
+                    @Override
+                    public void onCompleted() {
+                        o.set(-1);
+                        finish.countDown();
+                    }
+    
+                    @Override
+                    public void onError(Throwable e) {
+                        o.set(e);
+                        finish.countDown();
+                    }
+    
+                    @Override
+                    public void onNext(Object t) {
+                        o.set(t);
+                        finish.countDown();
+                    }
+                    
+                });
+                start.countDown();
+                
+                if (!finish.await(5, TimeUnit.SECONDS)) {
+                    System.out.println(o.get());
+                    System.out.println(rs.hasObservers());
+                    rs.onCompleted();
+                    Assert.fail("Timeout @ " + i);
+                    break;
+                } else {
+                    Assert.assertEquals(1, o.get());
+                    worker.schedule(new Action0() {
+                        @Override
+                        public void call() {
+                            rs.onCompleted();
+                        }
+                    });
+                }
+            }
+        } finally {
+            worker.unsubscribe();
+        }
+    }
+    
+    @Test
+    public void testCurrentStateMethodsNormalEmptyStart() {
+        BehaviorSubject<Object> as = BehaviorSubject.create();
+        
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onNext(1);
+        
+        assertTrue(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertEquals(1, as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onCompleted();
+        
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertTrue(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+    }
+    
+    @Test
+    public void testCurrentStateMethodsNormalSomeStart() {
+        BehaviorSubject<Object> as = BehaviorSubject.create((Object)1);
+        
+        assertTrue(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertEquals(1, as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onNext(2);
+        
+        assertTrue(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertEquals(2, as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onCompleted();
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertTrue(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+    }
+    
+    @Test
+    public void testCurrentStateMethodsEmpty() {
+        BehaviorSubject<Object> as = BehaviorSubject.create();
+        
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onCompleted();
+        
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertTrue(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+    }
+    @Test
+    public void testCurrentStateMethodsError() {
+        BehaviorSubject<Object> as = BehaviorSubject.create();
+        
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onError(new TestException());
+        
+        assertFalse(as.hasValue());
+        assertTrue(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertNull(as.getValue());
+        assertTrue(as.getThrowable() instanceof TestException);
     }
 }

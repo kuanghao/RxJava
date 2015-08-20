@@ -1,6 +1,1225 @@
 # RxJava Releases #
 
-### Version 1.0.0-rc.4 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.4%7C)) ###
+### Version 1.0.14 – August 12th 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.14%7C)) ###
+
+* [Pull 2963] (https://github.com/ReactiveX/RxJava/pull/2963) Set of standard producers and updated queue implementations
+* [Pull 3138] (https://github.com/ReactiveX/RxJava/pull/3138) Range overhead reduction.
+* [Pull 3137] (https://github.com/ReactiveX/RxJava/pull/3137) FromIterable overhead reduction.
+* [Pull 3078] (https://github.com/ReactiveX/RxJava/pull/3078) switchOnNext() - fix lost requests race condition
+* [Pull 3112] (https://github.com/ReactiveX/RxJava/pull/3112) Observers package test coverage and fixes.
+* [Pull 3123] (https://github.com/ReactiveX/RxJava/pull/3123) Remove redundant type parameter in EmptyAction 
+* [Pull 3104] (https://github.com/ReactiveX/RxJava/pull/3104) Fix SynchronizedQueue.equals
+* [Pull 3147] (https://github.com/ReactiveX/RxJava/pull/3147) Remove unnecessary static modifier
+* [Pull 3144] (https://github.com/ReactiveX/RxJava/pull/3144) Remove redundant cast in Exceptions
+* [Pull 3143] (https://github.com/ReactiveX/RxJava/pull/3143) Fix for BackpressureUtils method javadoc
+* [Pull 3141] (https://github.com/ReactiveX/RxJava/pull/3141) Improved Scheduler.Worker memory leak detection
+* [Pull 3082] (https://github.com/ReactiveX/RxJava/pull/3082) Observable.x(ConversionFunc) to allow extensions to Observables
+* [Pull 3103] (https://github.com/ReactiveX/RxJava/pull/3103) materialize() - add backpressure support
+* [Pull 3129] (https://github.com/ReactiveX/RxJava/pull/3129) Fix retry with predicate ignoring backpressure.
+* [Pull 3121] (https://github.com/ReactiveX/RxJava/pull/3121) Improve performance of NewThreadWorker, disable search for setRemoveOnCancelPolicy() on Android API < 21
+* [Pull 3120] (https://github.com/ReactiveX/RxJava/pull/3120) No InterruptedException with synchronous BlockingObservable
+* [Pull 3117] (https://github.com/ReactiveX/RxJava/pull/3117) Operator replay() now supports backpressure
+* [Pull 3116] (https://github.com/ReactiveX/RxJava/pull/3116) cache() now supports backpressure
+* [Pull 3110] (https://github.com/ReactiveX/RxJava/pull/3110) Test coverage of rx.functions utility methods.
+* [Pull 3101] (https://github.com/ReactiveX/RxJava/pull/3101) Fix take swallowing exception if thrown by exactly the nth onNext call to it.
+* [Pull 3109] (https://github.com/ReactiveX/RxJava/pull/3109) Unit tests and cleanup of JCTools' queues.
+* [Pull 3108] (https://github.com/ReactiveX/RxJava/pull/3108) remove OperatorOnErrorFlatMap because unused
+* [Pull 3079] (https://github.com/ReactiveX/RxJava/pull/3079) fix forEach javadoc
+* [Pull 3085] (https://github.com/ReactiveX/RxJava/pull/3085) break tests as approach timeout so that don't fail on slow machines
+* [Pull 3086] (https://github.com/ReactiveX/RxJava/pull/3086) improve ExecutorSchedulerTest.testOnBackpressureDrop
+* [Pull 3093] (https://github.com/ReactiveX/RxJava/pull/3093) Fix request != 0 checking in the scalar paths of merge()
+
+### Version 1.0.13 – July 20th 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.13%7C)) ###
+
+This release has quite a few bug fixes and some new functionality. Items of note are detailed here with the list of changes at the bottom.
+
+##### merge
+
+The `merge` operator went through a major rewrite to fix some edge case bugs in the previous version. This has been sitting for months going through review and performance testing due to the importance and ubiquity of its usage. It is believed this rewrite is now production ready and achieves the goal of being more correct (no known edge cases at this time) while retaining comparable performance and memory usage. 
+
+Special thanks to @akarnokd for this as `merge` is a challenging one to implement. 
+
+##### window fix and behavior change
+
+Unsubscription bugs were fixed in `window`. Along the way it also resulted in a fix to one of the `window` overloads that had a functional discrepancy.
+
+```java
+window(Func0<? extends Observable<? extends TClosing>> closingSelector)
+```
+
+This is a small behavior change that corrects it. If you use this overload, please review the change to ensure your application is not affected by an assumption of the previously buggy behavior: https://github.com/ReactiveX/RxJava/pull/3039
+
+Note that this behavior change only affects that particular overload while the broader bug fixes affect all `window` overloads. 
+
+##### rx.Single
+
+After [much discussion](https://github.com/ReactiveX/RxJava/issues/1594) it was decided to add a new type to represent an `Observable` that emits a single item. Much bike-shedding led to the name `Single`. This was chosen because `Future`, `Promise` and `Task` are overused and already have nuanced connotations that differ from `rx.Single`, and we didn't want long, obnoxious names with `Observable` as a prefix or suffix. Read the issue thread if you want to dig into the long debates.
+
+If you want to understand the reasoning behind adding this type, you can read about it [in this comment](https://github.com/ReactiveX/RxJava/issues/1594#issuecomment-101300655).
+
+In short, request/response semantics are so common that it was decided worth creating a type that composes well with an `Observable` but only exposes request/response. The difference in behavior and comparability was also deemed worth having an alternative to `Future`. In particular, a `Single` is lazy whereas `Future` is eager. Additionally, merging of `Single`s becomes an `Observable`, whereas combining `Future`s always emits another `Future`. 
+
+Note that the API is added in an `@Experimental` state. We are fairly confident this will stick around, but are holding final judgement until it is used more broadly. We will promote to a stable API in v1.1 or v1.2. 
+
+Examples below demonstrate use of `Single`.
+
+```java
+// Hello World
+Single<String> hello = Single.just("Hello World!");
+hello.subscribe(System.out::println);
+
+// Async request/response
+Single<String> one = getData(1);
+Single<String> two = getOtherData(2);
+
+// merge request/responses into an Observable of multiple values (not possible with Futures)
+Observable<String> merged = one.mergeWith(two);
+
+// zip request/responses into another Single (similar to combining 2 Futures)
+Single<String> zipped = one.zipWith(two, (a, b) -> a + b);
+
+// flatMap to a Single
+Single<String> flatMapSingle = one.flatMap(v -> {
+	return getOtherData(5);
+});
+
+// flatMap to an Observable
+Observable<Integer> flatMapObservable = one.flatMapObservable(v -> {
+	return Observable.just(1, 2, 3);
+});
+
+// toObservable
+Observable<String> toObservable = one.toObservable();
+
+// toSingle
+Single<Integer> toSingle = Observable.just(1).toSingle();
+
+public static Single<String> getData(int id) {
+	return Single.<String> create(s -> {
+		// do blocking IO
+		s.onSuccess("data_" + id);
+	}).subscribeOn(Schedulers.io());
+}
+
+public static Single<String> getOtherData(int id) {
+	return Single.<String> create(s -> {
+		// simulate non-blocking IO
+		new Thread(() -> {
+			try {
+				s.onSuccess("other_" + id);
+			} catch (Exception e) {
+				s.onError(e);
+			}
+		}).start();
+	});
+}
+```
+
+##### ConnectableObservable.autoConnect
+
+A new feature was added to `ConnectableObservable` similar in behavior to `refCount()`, except that it doesn't disconnect when subscribers are lost. This is useful in triggering an "auto connect" once a certain number of subscribers have subscribed. 
+
+The [JavaDocs](https://github.com/ReactiveX/RxJava/blob/1877fa7bbc176029bcb5af00d8a7715dfbb6d373/src/main/java/rx/observables/ConnectableObservable.java#L96) and [unit tests](https://github.com/ReactiveX/RxJava/blob/1.x/src/test/java/rx/observables/ConnectableObservableTest.java) are good places to understand the feature.
+
+##### Deprecated onBackpressureBlock
+
+The `onBackpressureBlock` operator has been deprecated. It will not ever be removed during the 1.x lifecycle, but it is recommended to not use it. It has proven to be a common source of deadlocks and is difficult to debug. It is instead recommended to use non-blocking approaches to backpressure, rather than callstack blocking. Approaches to backpressure and flow control are [discussed on the wiki](https://github.com/ReactiveX/RxJava/wiki/Backpressure).
+
+#### Changes
+
+* [Pull 3012] (https://github.com/ReactiveX/RxJava/pull/3012) rx.Single
+* [Pull 2983] (https://github.com/ReactiveX/RxJava/pull/2983) Fixed multiple calls to onStart.
+* [Pull 2970] (https://github.com/ReactiveX/RxJava/pull/2970) Deprecated onBackpressureBlock
+* [Pull 2997] (https://github.com/ReactiveX/RxJava/pull/2997) Fix retry() race conditions
+* [Pull 3028] (https://github.com/ReactiveX/RxJava/pull/3028) Delay: error cut ahead was not properly serialized
+* [Pull 3042] (https://github.com/ReactiveX/RxJava/pull/3042) add backpressure support for defaultIfEmpty()
+* [Pull 3049] (https://github.com/ReactiveX/RxJava/pull/3049) single: add toSingle method to Observable
+* [Pull 3055] (https://github.com/ReactiveX/RxJava/pull/3055) toSingle() should use unsafeSubscribe
+* [Pull 3023] (https://github.com/ReactiveX/RxJava/pull/3023) ConnectableObservable autoConnect operator
+* [Pull 2928] (https://github.com/ReactiveX/RxJava/pull/2928) Merge and MergeMaxConcurrent unified and rewritten
+* [Pull 3039] (https://github.com/ReactiveX/RxJava/pull/3039) Window with Observable: fixed unsubscription and behavior
+* [Pull 3045] (https://github.com/ReactiveX/RxJava/pull/3045) ElementAt request management enhanced
+* [Pull 3048] (https://github.com/ReactiveX/RxJava/pull/3048) CompositeException extra NPE protection
+* [Pull 3052] (https://github.com/ReactiveX/RxJava/pull/3052) Reduce test failure likelihood of testMultiThreadedWithNPEinMiddle
+* [Pull 3031] (https://github.com/ReactiveX/RxJava/pull/3031) Fix OperatorFlatMapPerf.flatMapIntPassthruAsync Perf Test
+* [Pull 2975] (https://github.com/ReactiveX/RxJava/pull/2975) Deprecate and rename two timer overloads to interval
+* [Pull 2982] (https://github.com/ReactiveX/RxJava/pull/2982) TestSubscriber - add factory methods
+* [Pull 2995] (https://github.com/ReactiveX/RxJava/pull/2995) switchOnNext - ensure initial requests additive and fix request overflow
+* [Pull 2972] (https://github.com/ReactiveX/RxJava/pull/2972) Fixed window(time) to work properly with unsubscription, added
+* [Pull 2990] (https://github.com/ReactiveX/RxJava/pull/2990) Improve Subscriber readability
+* [Pull 3018] (https://github.com/ReactiveX/RxJava/pull/3018) TestSubscriber - fix awaitTerminalEventAndUnsubscribeOnTimeout
+* [Pull 3034] (https://github.com/ReactiveX/RxJava/pull/3034) Instantiate EMPTY lazily
+* [Pull 3033] (https://github.com/ReactiveX/RxJava/pull/3033) takeLast() javadoc fixes, standardize parameter names (count instead of num)
+* [Pull 3043] (https://github.com/ReactiveX/RxJava/pull/3043) TestSubscriber javadoc cleanup
+* [Pull 3065] (https://github.com/ReactiveX/RxJava/pull/3065) add Subscribers.wrap
+* [Pull 3091] (https://github.com/ReactiveX/RxJava/pull/3091) Fix autoConnect calling onStart twice.
+* [Pull 3092] (https://github.com/ReactiveX/RxJava/pull/3092) Single.toObservable
+
+
+### Version 1.0.12 – June 9th 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.12%7C)) ###
+
+* [Pull 2963] (https://github.com/ReactiveX/RxJava/pull/2963) Set of standard producers and updated queue implementations
+* [Pull 2961] (https://github.com/ReactiveX/RxJava/pull/2961) fix Amb backpressure bug
+* [Pull 2960] (https://github.com/ReactiveX/RxJava/pull/2960) fix OperatorConcat race condition where request lost
+* [Pull 2985] (https://github.com/ReactiveX/RxJava/pull/2985) improve OperatorSerializeTest.testMultiThreadedWithNPEinMiddle
+* [Pull 2986] (https://github.com/ReactiveX/RxJava/pull/2986) OperatorAll - implement backpressure and include last value in exception cause 
+* [Pull 2987] (https://github.com/ReactiveX/RxJava/pull/2987) fix skip() race condition and request overflow
+* [Pull 2988] (https://github.com/ReactiveX/RxJava/pull/2988) Operator exists() - implement backpressure & include last value in exception cause
+* [Pull 2989] (https://github.com/ReactiveX/RxJava/pull/2989) prevent take() from requesting more than needed
+* [Pull 2991] (https://github.com/ReactiveX/RxJava/pull/2991) takeUntil(predicate) - include last value in error cause
+* [Pull 2992] (https://github.com/ReactiveX/RxJava/pull/2992) Fix value rendering in error last cause for primitive types
+* [Pull 2993] (https://github.com/ReactiveX/RxJava/pull/2993) takeWhile(predicate) - include last value in error cause
+* [Pull 2996] (https://github.com/ReactiveX/RxJava/pull/2996) switchIfEmpty - fix backpressure bug and lost requests
+* [Pull 2999] (https://github.com/ReactiveX/RxJava/pull/2999) Fix a wrong assertion in assertError
+* [Pull 3000] (https://github.com/ReactiveX/RxJava/pull/3000) Replace the Java 7 AssertionError(message, cause) with initCause
+* [Pull 3001] (https://github.com/ReactiveX/RxJava/pull/3001) use Subscribers.from()
+* [Pull 3009] (https://github.com/ReactiveX/RxJava/pull/3009) Observable.from(iterable) - ensure it.hasNext() is not called unnecessarily
+
+### Version 1.0.11 – May 19th 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.11%7C)) ###
+
+* [Pull 2948] (https://github.com/ReactiveX/RxJava/pull/2948) More assertions for TestSubscriber
+* [Pull 2956] (https://github.com/ReactiveX/RxJava/pull/2956) OperatorObserveOn should not request more after child is unsubscribed
+* [Pull 2951] (https://github.com/ReactiveX/RxJava/pull/2951) OperatorConcat - prevent request overflow and fix race condition
+* [Pull 2950] (https://github.com/ReactiveX/RxJava/pull/2950) OperatorGroupBy - check for request overflow and don't decrement when at Long.MAX_VALUE
+* [Pull 2923] (https://github.com/ReactiveX/RxJava/pull/2923) OnBackpressureLatest: Non-blocking version of the toBlocking().latest() operator.
+* [Pull 2907] (https://github.com/ReactiveX/RxJava/pull/2907) Fixed schedule race and task retention with ExecutorScheduler.
+* [Pull 2929] (https://github.com/ReactiveX/RxJava/pull/2929) OperatorObserveOn onComplete can be emitted despite onError being called
+* [Pull 2940] (https://github.com/ReactiveX/RxJava/pull/2940) Remove unnecessary localHasValue check
+* [Pull 2939] (https://github.com/ReactiveX/RxJava/pull/2939) publish: Fix another race between terminalEvent and the queue being empty.
+* [Pull 2938] (https://github.com/ReactiveX/RxJava/pull/2938) Fixed Observable.combineLatest overflow bug on Android
+* [Pull 2936] (https://github.com/ReactiveX/RxJava/pull/2936) Fix TestSubject bug
+* [Pull 2934] (https://github.com/ReactiveX/RxJava/pull/2934) Fix termination race condition in OperatorPublish.dispatch
+* [Pull 2963] (https://github.com/ReactiveX/RxJava/pull/2963) Set of standard producers and updated queue implementations with some
+
+### Version 1.0.10 – April 30th 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.10%7C)) ###
+
+* [Pull 2892] (https://github.com/ReactiveX/RxJava/pull/2892) Fix Observable.range race condition 
+* [Pull 2895] (https://github.com/ReactiveX/RxJava/pull/2895) Fix Observable.from(Iterable) race condition
+* [Pull 2898] (https://github.com/ReactiveX/RxJava/pull/2898) Observable.range - add unit test for eager completion on empty
+* [Pull 2899] (https://github.com/ReactiveX/RxJava/pull/2899) Observable.from(empty) to emit onComplete even when 0 requested
+* [Pull 2894] (https://github.com/ReactiveX/RxJava/pull/2894) Concat: fixed reentrancy problem in completeInner
+* [Pull 2880] (https://github.com/ReactiveX/RxJava/pull/2880) Use singleton reduction functions in count and countLong
+* [Pull 2902] (https://github.com/ReactiveX/RxJava/pull/2902) Prevent ExceptionsTest from hanging when testing stack overflow
+* [Pull 2897] (https://github.com/ReactiveX/RxJava/pull/2897) Fix for overlapping windows.
+* [Pull 2904] (https://github.com/ReactiveX/RxJava/pull/2904) TakeLast - add request overflow check
+* [Pull 2905] (https://github.com/ReactiveX/RxJava/pull/2905) Use singleton Operators where we can
+* [Pull 2909] (https://github.com/ReactiveX/RxJava/pull/2909) Fix the drainer to check if the queue is empty before quitting.
+* [Pull 2911] (https://github.com/ReactiveX/RxJava/pull/2911) OperatorPublish benchmark
+* [Pull 2914] (https://github.com/ReactiveX/RxJava/pull/2914) Optimization - use OperatorTakeLastOne for takeLast(1)
+* [Pull 2915] (https://github.com/ReactiveX/RxJava/pull/2915) Observable.ignoreElements - optimize
+* [Pull 2883] (https://github.com/ReactiveX/RxJava/pull/2883) Proposal: standardized Subject state-peeking methods.
+* [Pull 2901] (https://github.com/ReactiveX/RxJava/pull/2901) Operators toList and toSortedList now support backpressure
+* [Pull 2921] (https://github.com/ReactiveX/RxJava/pull/2921) OperatorObserveOn - handle request overflow correctly
+* [Pull 2882] (https://github.com/ReactiveX/RxJava/pull/2882) OperatorScan - don't call onNext after onError is called
+* [Pull 2875] (https://github.com/ReactiveX/RxJava/pull/2875) Fix: NPE in requestFromChild method.
+* [Pull 2814] (https://github.com/ReactiveX/RxJava/pull/2814) Operator Publish full rewrite
+* [Pull 2820] (https://github.com/ReactiveX/RxJava/pull/2820) Backpressure for window(size)
+* [Pull 2912] (https://github.com/ReactiveX/RxJava/pull/2912) Fix the Scheduler performance degradation
+
+### Version 1.0.9 – April 9th 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.9%7C)) ###
+
+* [Pull 2845] (https://github.com/ReactiveX/RxJava/pull/2845) Fix for repeat: wrong target of request 
+* [Pull 2851] (https://github.com/ReactiveX/RxJava/pull/2851) Add 'request(Long.MAX_VALUE)' in 'onStart' to fix the backpressure issue of debounce
+* [Pull 2852] (https://github.com/ReactiveX/RxJava/pull/2852) Change retryWhen to eagerly ignore an error'd source's subsequent events
+* [Pull 2859] (https://github.com/ReactiveX/RxJava/pull/2859) OperatorDoOnRequest should unsubscribe from upstream
+* [Pull 2854] (https://github.com/ReactiveX/RxJava/pull/2854) Fixes wrong request accounting in AbstractOnSubscribe
+* [Pull 2860] (https://github.com/ReactiveX/RxJava/pull/2860) OperatorSingle should request exactly what it needs
+* [Pull 2817] (https://github.com/ReactiveX/RxJava/pull/2817) Fix for non-deterministic: testOnBackpressureDropWithAction
+* [Pull 2818] (https://github.com/ReactiveX/RxJava/pull/2818) Small fix for the getValue javadoc in AsyncSubject and BehaviorSubject
+* [Pull 2823] (https://github.com/ReactiveX/RxJava/pull/2823) Enable maven central sync via bintray
+* [Pull 2807] (https://github.com/ReactiveX/RxJava/pull/2807) Corrected all Java interfaces declarations
+* [Pull 2632] (https://github.com/ReactiveX/RxJava/pull/2632) Implement hook to render specific types in OnNextValue
+* [Pull 2837] (https://github.com/ReactiveX/RxJava/pull/2837) Fixed a non-deterministic test and a few scheduler leaks (in tests)
+* [Pull 2825] (https://github.com/ReactiveX/RxJava/pull/2825) Fixed javadoc for Observable.repeat() method
+* [Pull 2838] (https://github.com/ReactiveX/RxJava/pull/2838) Fix typo in OnSubscribe interface's Javadoc
+* [Pull 2864] (https://github.com/ReactiveX/RxJava/pull/2864) IndexedRingBuffer.getInstance can infer type
+* [Pull 2862] (https://github.com/ReactiveX/RxJava/pull/2862) Cleanup warnings in test source
+* [Pull 2868] (https://github.com/ReactiveX/RxJava/pull/2868) Fixed reentrancy issue with the error producer. 
+* [Pull 2866] (https://github.com/ReactiveX/RxJava/pull/2866) Use simpler naming in Action1, Func1 to assist IDEs
+
+### Version 1.0.8 – March 7th 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.8%7C)) ###
+
+* [Pull 2809] (https://github.com/ReactiveX/RxJava/pull/2809) Fixed takeUntil not unsubscribing from either of the observables in case of a terminal condition.
+* [Pull 2804] (https://github.com/ReactiveX/RxJava/pull/2804) ObserveOn throughput enhancements
+* [Pull 2767] (https://github.com/ReactiveX/RxJava/pull/2767) Optimized scalar observeOn/subscribeOn
+* [Pull 2776] (https://github.com/ReactiveX/RxJava/pull/2776) Experimental: add new operator onBackpressureDrop(Action1 onDrop)
+* [Pull 2788] (https://github.com/ReactiveX/RxJava/pull/2788) Fix the bug that 'publish' will cache items when no subscriber
+* [Pull 2779] (https://github.com/ReactiveX/RxJava/pull/2779) OperatorMulticast.connect(connection) should not return null
+* [Pull 2771] (https://github.com/ReactiveX/RxJava/pull/2771) OnSubscribeRange request overflow check
+* [Pull 2770] (https://github.com/ReactiveX/RxJava/pull/2770) OperatorOnBackpressureDrop request overflow check
+* [Pull 2769] (https://github.com/ReactiveX/RxJava/pull/2769) OperatorCombineLatest request overflow check
+
+### Version 1.0.7 – February 21st 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.7%7C)) ###
+
+This release includes some bug fixes along with a new operator and performance enhancements.
+
+#### Experimental Operator
+
+Note that these APIs [may still change or be removed altogether](https://github.com/ReactiveX/RxJava#experimental) since they are marked as `@Experimental`. 
+
+##### withLatestFrom(Observable, Selector)
+
+This allows combining all values from one `Observable` with the latest value from a second `Observable` at each `onNext`.
+
+For example:
+
+```java
+Observable<Long> a = Observable.interval(1, TimeUnit.SECONDS);
+Observable<Long> b = Observable.interval(250, TimeUnit.MILLISECONDS);
+
+
+a.withLatestFrom(b, (x, y) -> new long[] { x, y })
+        .toBlocking()
+        .forEach(pair -> System.out.println("a: " + pair[0] + " b: " + pair[1]));
+```
+
+This outputs:
+
+```
+a: 0 b: 3
+a: 1 b: 6
+a: 2 b: 11
+a: 3 b: 15
+a: 4 b: 19
+a: 5 b: 23
+a: 6 b: 27
+```
+
+
+#### Changes
+
+https://github.com/ReactiveX/RxJava/pull/2760 Operator: WithLatestFrom
+https://github.com/ReactiveX/RxJava/pull/2762 Optimized isUnsubscribed check
+https://github.com/ReactiveX/RxJava/pull/2759 Observable.using should use unsafeSubscribe and enable eager disposal
+https://github.com/ReactiveX/RxJava/pull/2655 SwitchOnNext: fix upstream producer replacing the ops own producer
+
+### Version 1.0.6 – February 11th 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.6%7C)) ###
+
+This release adds an experimental operator and fixes several bugs. 
+
+##### flatMap(maxConcurrent)
+
+> Note that this API [may still change or be removed altogether](https://github.com/ReactiveX/RxJava#beta) since it is marked as `@Beta`. 
+
+A `flatMap` overload was added that allows limiting concurrency, or the number of `Observable`s being merged .
+
+This now means that these are the same, one using `merge` directly, the other using `flatMap` and passing in `10` as the `maxConcurrent`:
+
+```java
+Observable<Observable<Integer>> asyncWork = range(1, 1000000)
+        .doOnNext(i -> System.out.println("Emitted Value: " + i))
+        .map(item -> {
+            return just(item)
+                    .doOnNext(MergeMaxConcurrent::sleep)
+                    .subscribeOn(Schedulers.io());
+        });
+merge(asyncWork, 10).toBlocking().forEach(v -> System.out.println("Received: " + v));
+```
+
+```java
+range(1, 1000000)
+        .doOnNext(i -> System.out.println("Emitted Value: " + i))
+        .flatMap(item -> {
+            return just(item)
+                    .doOnNext(MergeMaxConcurrent::sleep)
+                    .subscribeOn(Schedulers.io());
+        }, 10)
+        .toBlocking().forEach(v -> System.out.println("Received: " + v));
+```
+
+#### Changes
+
+* [Pull 2627] (https://github.com/ReactiveX/RxJava/pull/2627) FlatMap overloads with maximum concurrency parameter
+* [Pull 2648] (https://github.com/ReactiveX/RxJava/pull/2648) TakeWhile: don't unsubscribe downstream.
+* [Pull 2580] (https://github.com/ReactiveX/RxJava/pull/2580) Allow configuring the maximum number of computation scheduler threads
+* [Pull 2601] (https://github.com/ReactiveX/RxJava/pull/2601) Added common Exceptions.throwIfAny to throw a collection of exceptions 
+* [Pull 2644] (https://github.com/ReactiveX/RxJava/pull/2644) Missing Unsafe class yields NoClassDefFoundError 
+* [Pull 2642] (https://github.com/ReactiveX/RxJava/pull/2642) Fix a potential memory leak in schedulePeriodically 
+* [Pull 2630] (https://github.com/ReactiveX/RxJava/pull/2630) Cast back Observer to Subscriber if passed to subscribe(Observer)
+* [Pull 2622] (https://github.com/ReactiveX/RxJava/pull/2622) Changed Observable.empty() into a stateless constant observable.
+* [Pull 2607] (https://github.com/ReactiveX/RxJava/pull/2607) OnSubscribeRefCount - improve comments
+
+
+### Version 1.0.5 – February 3rd 2015 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.5%7C)) ###
+
+This release includes many bug fixes along with a few new operators and enhancements.
+
+#### Experimental Operators
+
+This release adds a few experimental operators. 
+
+Note that these APIs [may still change or be removed altogether](https://github.com/ReactiveX/RxJava#experimental) since they are marked as `@Experimental`. 
+
+##### takeUntil(predicate)
+
+This operator allows conditionally unsubscribing an `Observable` but inclusively emitting the final `onNext`. This differs from `takeWhile` which excludes the final `onNext`.
+
+```java
+// takeUntil(predicate) example
+Observable.just(1, 2, 3, 4, 5, 6, 7)
+        .doOnEach(System.out::println)
+        .takeUntil(i -> i == 3)
+        .forEach(System.out::println);
+
+// takeWhile(predicate) example
+Observable.just(1, 2, 3, 4, 5, 6, 7)
+        .doOnEach(System.out::println)
+        .takeWhile(i -> i <= 3)
+        .forEach(System.out::println);
+```
+
+This outputs:
+
+```
+// takeUntil(predicate)
+[rx.Notification@30e84925 OnNext 1]
+1
+[rx.Notification@30e84926 OnNext 2]
+2
+[rx.Notification@30e84927 OnNext 3]
+3
+
+// takeWhile(predicate)
+[rx.Notification@30e84925 OnNext 1]
+1
+[rx.Notification@30e84926 OnNext 2]
+2
+[rx.Notification@30e84927 OnNext 3]
+3
+[rx.Notification@30e84928 OnNext 4]
+```
+
+Note how `takeWhile` produces 4 values and `takeUntil` produces 3.
+
+##### switchIfEmpty
+
+The new `switchIfEmpty` operator is a companion to `defaultIfEmpty` that switches to a different `Observable` if the primary `Observable` is empty.
+
+```java
+Observable.empty()
+        .switchIfEmpty(Observable.just(1, 2, 3))
+        .forEach(System.out::println);
+```
+
+#### Enhancements
+
+##### merge(maxConcurrent) with backpressure
+
+This release adds backpressure to `merge(maxConcurrent)` so that horizontal buffer bloat can also be controll with the `maxConcurrent` parameter.
+
+This allows parallel execution such as the following to work with backpressure:
+
+```java
+public class MergeMaxConcurrent {
+
+    public static void main(String[] args) {
+        // define 1,000,000 async tasks
+        Observable<Observable<Integer>> asyncWork = range(1, 1000000)
+                      .doOnNext(i -> System.out.println("Value: " + i))
+                .doOnRequest(r -> System.out.println("request1 " + r))
+                .map(item -> {
+                    return just(item)
+                            // simulate slow IO or computation
+                            .doOnNext(MergeMaxConcurrent::sleep)
+                            .subscribeOn(Schedulers.io());
+                })
+                .doOnRequest(r -> System.out.println("request2 " + r));
+                
+        // allow 10 outstanding tasks at a time
+        merge(asyncWork, 10).toBlocking().forEach(System.out::println);
+    }
+
+    public static void sleep(int value) {
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+    }
+}
+```
+
+In prior versions all 1,000,000 tasks are immediately emitted and queued for execution. As of this release it correctly allows 10 at a time to be emitted. 
+
+#### Changes
+
+
+* [Pull 2493] (https://github.com/ReactiveX/RxJava/pull/2493) Experimental Operator TakeUntil with predicate
+* [Pull 2585] (https://github.com/ReactiveX/RxJava/pull/2585) Experimental Operator: switchIfEmpty
+* [Pull 2470] (https://github.com/ReactiveX/RxJava/pull/2470) Experimental Subject state information methods & bounded ReplaySubject termination
+* [Pull 2540] (https://github.com/ReactiveX/RxJava/pull/2540) Merge with max concurrency now supports backpressure.
+* [Pull 2332] (https://github.com/ReactiveX/RxJava/pull/2332) Operator retry test fix attempt
+* [Pull 2244] (https://github.com/ReactiveX/RxJava/pull/2244) OperatorTakeLast add check for isUnsubscribed to fast path
+* [Pull 2469] (https://github.com/ReactiveX/RxJava/pull/2469) Remove the execute permission from source files
+* [Pull 2455] (https://github.com/ReactiveX/RxJava/pull/2455) Fix for #2191 - OperatorMulticast fails to unsubscribe from source
+* [Pull 2474] (https://github.com/ReactiveX/RxJava/pull/2474) MergeTest.testConcurrency timeout to let other tests run
+* [Pull 2335] (https://github.com/ReactiveX/RxJava/pull/2335) A set of stateless operators that don't need to be instantiated
+* [Pull 2447] (https://github.com/ReactiveX/RxJava/pull/2447) Fail early if a null subscription is added to a CompositeSubscription.
+* [Pull 2475] (https://github.com/ReactiveX/RxJava/pull/2475) SynchronousQueue.clone fix
+* [Pull 2477] (https://github.com/ReactiveX/RxJava/pull/2477) Backpressure tests fix0121
+* [Pull 2476] (https://github.com/ReactiveX/RxJava/pull/2476) Fixed off-by-one error and value-drop in the window operator.
+* [Pull 2478] (https://github.com/ReactiveX/RxJava/pull/2478) RefCountAsync: adjusted time values as 1 ms is unreliable
+* [Pull 2238] (https://github.com/ReactiveX/RxJava/pull/2238) Fix the bug that cache doesn't unsubscribe the source Observable when the source is terminated
+* [Pull 1840] (https://github.com/ReactiveX/RxJava/pull/1840) Unsubscribe when thread is interrupted
+* [Pull 2471] (https://github.com/ReactiveX/RxJava/pull/2471) Fixes NPEs reported in ReactiveX#1702 by synchronizing queue. 
+* [Pull 2482] (https://github.com/ReactiveX/RxJava/pull/2482) Merge: fixed hangs & missed scalar emissions
+* [Pull 2547] (https://github.com/ReactiveX/RxJava/pull/2547) Warnings cleanup
+* [Pull 2465] (https://github.com/ReactiveX/RxJava/pull/2465) ScheduledExecutorService: call purge periodically on JDK 6 to avoid cancelled task-retention
+* [Pull 2591] (https://github.com/ReactiveX/RxJava/pull/2591) Changed the naming of the NewThreadWorker's system parameters
+* [Pull 2543] (https://github.com/ReactiveX/RxJava/pull/2543) OperatorMerge handle request overflow
+* [Pull 2548] (https://github.com/ReactiveX/RxJava/pull/2548) Subscriber.request should throw exception if negative request made
+* [Pull 2550] (https://github.com/ReactiveX/RxJava/pull/2550) Subscriber.onStart requests should be additive (and check for overflow)
+* [Pull 2553] (https://github.com/ReactiveX/RxJava/pull/2553) RxRingBuffer with synchronization
+* [Pull 2565] (https://github.com/ReactiveX/RxJava/pull/2565) Obstruction detection in tests.
+* [Pull 2563] (https://github.com/ReactiveX/RxJava/pull/2563) Retry backpressure test: split error conditions into separate test lines. 
+* [Pull 2572] (https://github.com/ReactiveX/RxJava/pull/2572) Give more time to certain concurrency tests.
+* [Pull 2559] (https://github.com/ReactiveX/RxJava/pull/2559) OnSubscribeFromIterable - add request overflow check
+* [Pull 2574] (https://github.com/ReactiveX/RxJava/pull/2574) SizeEviction test needs to return false
+* [Pull 2561] (https://github.com/ReactiveX/RxJava/pull/2561) Updating queue code from JCTools
+* [Pull 2566] (https://github.com/ReactiveX/RxJava/pull/2566) CombineLatest: fixed concurrent requestUpTo yielding -1 requests
+* [Pull 2552] (https://github.com/ReactiveX/RxJava/pull/2552) Publish: fixed incorrect subscriber requested accounting
+* [Pull 2583] (https://github.com/ReactiveX/RxJava/pull/2583) Added perf tests for various container-like subscriptions
+* [Pull 1955] (https://github.com/ReactiveX/RxJava/pull/1955) OnBackpressureXXX: support for common drain manager & fix for former concurrency bugs
+* [Pull 2590] (https://github.com/ReactiveX/RxJava/pull/2590) Zip: fixed unbounded downstream requesting above Long.MAX_VALUE
+* [Pull 2589] (https://github.com/ReactiveX/RxJava/pull/2589) Repeat/retry: fixed unbounded downstream requesting above Long.MAX_VALUE
+* [Pull 2567] (https://github.com/ReactiveX/RxJava/pull/2567) RefCount: disconnect all if upstream terminates
+* [Pull 2593] (https://github.com/ReactiveX/RxJava/pull/2593) Zip: emit onCompleted without waiting for request + avoid re-reading fields
+
+
+### Version 1.0.4 – December 29th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.4%7C)) ###
+
+* [Pull 2156] (https://github.com/ReactiveX/RxJava/pull/2156) Fix the issue that map may swallow fatal exceptions
+* [Pull 1967] (https://github.com/ReactiveX/RxJava/pull/1967) Fix the issue that GroupBy may not call 'unsubscribe'
+* [Pull 2052] (https://github.com/ReactiveX/RxJava/pull/2052) OperatorDoOnRequest.ParentSubscriber should be static class
+* [Pull 2237] (https://github.com/ReactiveX/RxJava/pull/2237) Make Publish Operator Release RingBuffer
+* [Pull 2053] (https://github.com/ReactiveX/RxJava/pull/2053) Fixed wrong bounded ReplaySubject use in test
+
+### Version 1.0.3 – December 15th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.3%7C)) ###
+
+* [Pull 1928] (https://github.com/ReactiveX/RxJava/pull/1928) Experimental: Add onBackpressureBuffer with capacity
+* [Pull 1946] (https://github.com/ReactiveX/RxJava/pull/1946) Experimental: AbstractOnSubscribe to help build Observables one onNext at a time. 
+* [Pull 1960] (https://github.com/ReactiveX/RxJava/pull/1960) Beta: doOnRequest
+* [Pull 1965] (https://github.com/ReactiveX/RxJava/pull/1965) Fix the issue that Sample doesn't call 'unsubscribe' 
+* [Pull 1966] (https://github.com/ReactiveX/RxJava/pull/1966) Fix NPE when the key is null in GroupBy
+* [Pull 1964] (https://github.com/ReactiveX/RxJava/pull/1964) Handle 0 or negative request in Buffer
+* [Pull 1957] (https://github.com/ReactiveX/RxJava/pull/1957) Fix 'request(0)' issue in Scan
+* [Pull 1950] (https://github.com/ReactiveX/RxJava/pull/1950) Add "Subscriptions.unsubscribed" to fix the 'isUnsubscribed' issue
+* [Pull 1938] (https://github.com/ReactiveX/RxJava/pull/1938) Any/All should not unsubscribe downstream.
+* [Pull 1968] (https://github.com/ReactiveX/RxJava/pull/1968) Upgrade to Gradle 2.2
+* [Pull 1961] (https://github.com/ReactiveX/RxJava/pull/1961) Remove Request Batching in Merge
+
+* [Pull 1953] (https://github.com/ReactiveX/RxJava/pull/1953) Fixed timer cast-to-int crash causing incorrect benchmark.
+* [Pull 1952] (https://github.com/ReactiveX/RxJava/pull/1952) Remove ActionSubscription
+* [Pull 1951] (https://github.com/ReactiveX/RxJava/pull/1951) Remove extraneous request(n) and onCompleted() calls when unsubscribed.
+* [Pull 1947] (https://github.com/ReactiveX/RxJava/pull/1947) Fixed first emission racing with pre and post subscription.
+* [Pull 1937] (https://github.com/ReactiveX/RxJava/pull/1937) Scheduler.Worker to be finally unsubscribed to avoid interference
+* [Pull 1926] (https://github.com/ReactiveX/RxJava/pull/1926) Move the codes out of the finally block
+* [Pull 1922] (https://github.com/ReactiveX/RxJava/pull/1922) Set removeOnCancelPolicy on the threadpool if supported
+
+### Version 1.0.2 – December 1st 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.2%7C)) ###
+
+This release adds `@Beta` and `@Experimental` annotations to mark APIs that are not yet stable. 
+
+An example of how this looks in the [Javadocs](http://reactivex.io/RxJava/javadoc/rx/Observable.html#onBackpressureBlock()) is:
+
+```
+@Experimental
+public final Observable<T> onBackpressureBlock()
+```
+
+The lifecycle and stability of these are [documented in the README](https://github.com/ReactiveX/RxJava/blob/1.x/README.md#versioning) as follows:
+
+> #### @Beta
+
+> APIs marked with the `@Beta` annotation at the class or method level are subject to change. They can be modified in any way, or even removed, at any time. If your code is a library itself (i.e. it is used on the CLASSPATH of users outside your own control), you should not use beta APIs, unless you repackage them (e.g. using ProGuard, shading, etc).
+
+> #### @Experimental
+
+> APIs marked with the `@Experimental` annotation at the class or method level will almost certainly change. They can be modified in any way, or even removed, at any time. You should not use or rely on them in any production code. They are purely to allow broad testing and feedback. 
+
+* [Pull 1905] (https://github.com/ReactiveX/RxJava/pull/1905) Beta & Experimental Annotations
+* [Pull 1907] (https://github.com/ReactiveX/RxJava/pull/1907) Experimental: onBackpressureBlock
+* [Pull 1903] (https://github.com/ReactiveX/RxJava/pull/1903) Fix TestScheduler Handling of Immediate vs Virtual Time
+* [Pull 1898] (https://github.com/ReactiveX/RxJava/pull/1898) Scheduled action no interrupt
+* [Pull 1904] (https://github.com/ReactiveX/RxJava/pull/1904) Fix the bug that Scan may request 0 when n is 1
+* [Pull 1912] (https://github.com/ReactiveX/RxJava/pull/1912) Fixed retry without backpressure & test function to support bp
+
+### Version 1.0.1 – November 28th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.1%7C)) ###
+
+* [Pull 1893] (https://github.com/ReactiveX/RxJava/pull/1893) Fixed incorrect error merging.
+* [Pull 1901] (https://github.com/ReactiveX/RxJava/pull/1901) Fixed redo & groupBy backpressure management
+
+### Version 1.0.0 – November 18th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0%7C)) ###
+
+After 2+ years of internal and open source development, 3600+ commits, 100+ releases, and with the help of 97 contributors RxJava has hit version 1.0.0.
+
+Thank you @headinthebox @zsxwing @samuelgruetter @akarnokd @quidryan @DavidMGross @abersnaze @jmhofer @mairbek @mttkay @daveray @mattrjacobs @michaeldejong @MarioAriasC @johngmyers @pron @jbripley @davidmoten @gliptak @johnhmarks @jloisel @billyy @prabirshrestha @ragalie @abliss @dpsm @daschl @thegeez and the [many other contributors](https://github.com/ReactiveX/RxJava/graphs/contributors) and those who have reported bugs, tweeted, blogged or presented about RxJava.
+
+The quality of this release could not have been achieved without all of your help. Thank you for your involvement and for building a community around this project. 
+
+
+### JVM Language Adaptors & Subprojects
+
+As of 1.0 the JVM language adapters and other subprojects no longer live under RxJava but have been separated out into their own projects with their own release cycles:
+
+- [RxAndroid](https://github.com/ReactiveX/RxAndroid)
+- [RxScala](https://github.com/ReactiveX/RxScala)
+- [RxGroovy](https://github.com/ReactiveX/RxGroovy)
+- [RxClojure](https://github.com/ReactiveX/RxClojure)
+- [RxKotlin](https://github.com/ReactiveX/RxKotlin)
+- [RxJRuby](https://github.com/ReactiveX/RxJRuby)
+- [RxJavaReactiveStreams](https://github.com/ReactiveX/RxJavaReactiveStreams)
+- [RxJavaString](https://github.com/ReactiveX/RxJavaString)
+- [RxJavaGuava](https://github.com/ReactiveX/RxJavaGuava)
+- [RxRoboVM](https://github.com/ReactiveX/RxRoboVM)
+- [RxSwing](https://github.com/ReactiveX/RxSwing)
+- [RxQuasar](https://github.com/ReactiveX/RxQuasar)
+- [RxJavaJoins](https://github.com/ReactiveX/RxJavaJoins)
+- [RxJavaComputationExpressions](https://github.com/ReactiveX/RxJavaComputationExpressions)
+- [RxJavaAsyncUtil](https://github.com/ReactiveX/RxJavaAsyncUtil)
+- [RxJavaDebug](https://github.com/ReactiveX/RxJavaDebug)
+- [RxJavaMath](https://github.com/ReactiveX/RxJavaMath)
+- [RxJavaFX](https://github.com/ReactiveX/RxJavaFX)
+- [RxApacheHttp](https://github.com/ReactiveX/RxApacheHttp)
+
+
+### Versioning
+
+Version 1.x is now a stable API and will be supported for several years. 
+
+Minor 1.x increments (such as 1.1, 1.2, etc) will occur when non-trivial new functionality is added or significant enhancements or bug fixes occur that may have behavioral changes that may affect some edge cases (such as dependence on behavior resulting from a bug). An example of an enhancement that would classify as this is adding reactive pull backpressure support to an operator that previously did not support it. This should be backwards compatible but does behave differently.
+
+Patch 1.x.y increments (such as 1.0.0 -> 1.0.1, 1.3.1 -> 1.3.2, etc) will occur for bug fixes and trivial functionality (like adding a method overload).
+
+### Roadmap and Known Issues
+
+- [1.0.x milestone](https://github.com/ReactiveX/RxJava/issues?q=is%3Aopen+is%3Aissue+milestone%3A1.0.x) with known issues
+- [1.1 milestone](https://github.com/ReactiveX/RxJava/issues?q=is%3Aopen+is%3Aissue+milestone%3A1.1) with additional support for reactive pull backpressure
+- [1.x](https://github.com/ReactiveX/RxJava/issues?q=is%3Aopen+is%3Aissue+milestone%3A1.x) is a catch all for other items that may be pursued in 1.2, 1.3 and later versions.
+
+
+
+### Change Log
+
+- all deprecated methods and types from v0.20 and earlier are deleted
+- now published to groupId `io.reactivex` instead of `com.netflix.rxjava`
+- artifactId is now `rxjava` instead of `rxjava-core`
+
+```
+io.reactivex:rxjava:1.0.0
+```
+
+Following are specific changes from 0.20 to 1.0 to be aware of:
+
+#### groupBy/groupByUntil
+
+The `groupByUntil` operator was removed by collapsing its behavior into `groupBy`. Previously on `groupBy` when a child `GroupedObservable` was unsubscribed it would internally retain the state and ignore all future `onNext` for that key.
+
+This matched behavior in Rx.Net but was found to be non-obvious and almost everyone using `groupBy` on long-lived streams actually wanted the behavior of `groupByUntil` where an unsubscribed `GroupedObservable` would clean up the resources and then if `onNext` for that key arrived again a new `GroupedObservable` would be emitted.
+
+Adding backpressure (reactive pull) to `groupByUntil` was found to not work easily with its signatures so before 1.0 Final it was decided to collapse `groupBy` and `groupByUntil`. Further details on this can be found in [Pull Request 1727](https://github.com/ReactiveX/RxJava/pull/1727).
+
+Here is an example of how `groupBy` now behaves when a child `GroupedObservable` is unsubscribed (using `take` here):
+
+```java
+// odd/even into lists of 10
+Observable.range(1, 100)
+        .groupBy(n -> n % 2 == 0)
+        .flatMap(g -> {
+            return g.take(10).toList();
+        }).forEach(System.out::println);
+```
+
+```
+[1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
+[2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
+[21, 23, 25, 27, 29, 31, 33, 35, 37, 39]
+[22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
+[41, 43, 45, 47, 49, 51, 53, 55, 57, 59]
+[42, 44, 46, 48, 50, 52, 54, 56, 58, 60]
+[61, 63, 65, 67, 69, 71, 73, 75, 77, 79]
+[62, 64, 66, 68, 70, 72, 74, 76, 78, 80]
+[81, 83, 85, 87, 89, 91, 93, 95, 97, 99]
+[82, 84, 86, 88, 90, 92, 94, 96, 98, 100]
+```
+
+Previously this would have only emitted 2 groups and ignored all subsequent values:
+
+```
+[1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
+[2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
+```
+
+On a finite stream, similar behavior of the previous `groupBy` implementation that would filter can be achieved like this:
+
+```java
+//odd/even into lists of 10
+Observable.range(1, 100)
+        .groupBy(n -> n % 2 == 0)
+        .flatMap(g -> {
+            return g.filter(i -> i <= 20).toList();
+        }).forEach(System.out::println);
+```
+
+```
+[1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
+[2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
+```
+
+That however does allow the stream to complete (which may not be wanted).
+
+To unsubscribe here are some choices that get the same output but efficiently unsubscribe up so the source only emits 40 values:
+
+```java
+Observable.timer(0, 1, TimeUnit.MILLISECONDS)
+        .groupBy(n -> n % 2 == 0)
+        .flatMap(g -> {
+            return g.take(10).toList();
+        }).take(2).toBlocking().forEach(System.out::println);
+```
+
+or
+
+```java
+Observable.timer(0, 1, TimeUnit.MILLISECONDS)
+        .take(20)
+        .groupBy(n -> n % 2 == 0)
+        .flatMap(g -> {
+            return g.toList();
+        }).toBlocking().forEach(System.out::println);
+```        
+
+These show that now `groupBy` composes like any other operator without the nuanced and hidden behavior of ignoring values after a child `GroupedObservable` is unsubscribed.
+
+Uses of `groupByUntil` can now all be done by just using operators like `take`, `takeWhile` and `takeUntil` on the `GroupedObservable` directly, such as this:
+
+```java
+Observable.from(Arrays.asList("a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c"))
+        .groupBy(n -> n)
+        .flatMap(g -> {
+            return g.take(3).reduce((s, s2) -> s + s2);
+        }).forEach(System.out::println);
+```
+```
+aaa
+bbb
+ccc
+aaa
+bbb
+ccc
+```
+
+
+
+#### retryWhen/repeatWhen
+
+The `retryWhen` and `repeatWhen` method signatures both emitted a `Observable<Notification>` type which could be queried to represent either `onError` in the `retryWhen` case or `onCompleted` in the `repeatWhen` case. This was found to be confusing and unnecessary. The signatures were changed to emit `Observable<Throwable>` for `retryWhen` and `Observable<Void>` for `repeatWhen` to better signal the type of notification they are emitting without the need to then query the `Notification`.
+
+The following contrived examples shows how the `Observable<Throwable>` is used to get the error that occurred when deciding to retry:
+
+```java
+    AtomicInteger count = new AtomicInteger();
+    Observable.create((Subscriber<? super String> s) -> {
+        if (count.getAndIncrement() == 0) {
+            s.onError(new RuntimeException("always fails"));
+        } else {
+            s.onError(new IllegalArgumentException("user error"));
+        }
+    }).retryWhen(attempts -> {
+        return attempts.flatMap(throwable -> {
+            if (throwable instanceof IllegalArgumentException) {
+                System.out.println("don't retry on IllegalArgumentException... allow failure");
+                return Observable.error(throwable);
+            } else {
+                System.out.println(throwable + " => retry after 1 second");
+                return Observable.timer(1, TimeUnit.SECONDS);
+            }
+        });
+    })
+    .toBlocking().forEach(System.out::println);
+```
+
+
+#### collect
+
+The `collect` operator was changed to require a factory method for the initial value. This allows the `Observable` to be executed multiple times and get a new value (typically a mutable data structure) each time. Prior to this the `Observable` could only be subscribed to once since it would retain the original mutable data structure and keep mutating it.
+
+```java
+Observable.range(0, 10).collect(() -> new ArrayList<Integer>(), (list, i) -> {
+    list.add(i);
+}).forEach(System.out::println);
+```
+
+#### Removed Scheduler.parallelism
+
+The `Scheduler.parallelism` method was no longer being used by anything so was removed. 
+
+#### Removed Observable.parallel
+
+The `parallel` operator was a failed experiment and almost all uses of it were wrong and led to confusion and often bad performance. Due to this it was removed. 
+
+Here is example code to show approaches to adding concurrency:
+
+```java
+import rx.Observable;
+import rx.Subscriber;
+import rx.schedulers.Schedulers;
+
+public class ParallelExecution {
+
+    public static void main(String[] args) {
+        System.out.println("------------ mergingAsync");
+        mergingAsync();
+        System.out.println("------------ mergingSync");
+        mergingSync();
+        System.out.println("------------ mergingSyncMadeAsync");
+        mergingSyncMadeAsync();
+        System.out.println("------------ flatMapExampleSync");
+        flatMapExampleSync();
+        System.out.println("------------ flatMapExampleAsync");
+        flatMapExampleAsync();
+        System.out.println("------------ flatMapBufferedExampleAsync");
+        flatMapBufferedExampleAsync();
+        System.out.println("------------ flatMapWindowedExampleAsync");
+        flatMapWindowedExampleAsync();
+        System.out.println("------------");
+    }
+
+    private static void mergingAsync() {
+        Observable.merge(getDataAsync(1), getDataAsync(2))
+                .toBlocking().forEach(System.out::println);
+    }
+
+    /**
+     * Merging async Observables subscribes to all of them concurrently.
+     */
+    private static void mergingSync() {
+        // here you'll see the delay as each is executed synchronously
+        Observable.merge(getDataSync(1), getDataSync(2))
+                .toBlocking().forEach(System.out::println);
+    }
+
+    /**
+     * If the Observables are synchronous they can be made async with `subscribeOn`
+     */
+    private static void mergingSyncMadeAsync() {
+        // if you have something synchronous and want to make it async, you can schedule it like this
+        // so here we see both executed concurrently
+        Observable.merge(
+                getDataSync(1).subscribeOn(Schedulers.io()),
+                getDataSync(2).subscribeOn(Schedulers.io())
+                )
+                .toBlocking().forEach(System.out::println);
+    }
+
+    /**
+     * flatMap uses `merge` so any async Observables it returns will execute concurrently.
+     */
+    private static void flatMapExampleAsync() {
+        Observable.range(0, 5).flatMap(i -> {
+            return getDataAsync(i);
+        }).toBlocking().forEach(System.out::println);
+    }
+
+    /**
+     * If synchronous Observables are merged (via flatMap here) then it will behave like `concat`
+     * and execute each Observable (getDataSync here) synchronously one after the other.
+     */
+    private static void flatMapExampleSync() {
+        Observable.range(0, 5).flatMap(i -> {
+            return getDataSync(i);
+        }).toBlocking().forEach(System.out::println);
+    }
+
+    /**
+     * If a single stream needs to be split across multiple CPUs it is generally more efficient to do it in batches.
+     * 
+     * The `buffer` operator can be used to batch into chunks that are then each processed on a separate thread.
+     */
+    private static void flatMapBufferedExampleAsync() {
+        Observable.range(0, 5000).buffer(500).flatMap(i -> {
+            return Observable.from(i).subscribeOn(Schedulers.computation()).map(item -> {
+                // simulate computational work
+                    try {
+                        Thread.sleep(1);
+                    } catch (Exception e) {
+                    }
+                    return item + " processed " + Thread.currentThread();
+                });
+        }).toBlocking().forEach(System.out::println);
+    }
+
+    /**
+     * Or the `window` operator can be used instead of buffer to process them as a stream instead of buffered list.
+     */
+    private static void flatMapWindowedExampleAsync() {
+        Observable.range(0, 5000).window(500).flatMap(work -> {
+            return work.observeOn(Schedulers.computation()).map(item -> {
+                // simulate computational work
+                    try {
+                        Thread.sleep(1);
+                    } catch (Exception e) {
+                    }
+                    return item + " processed " + Thread.currentThread();
+                });
+        }).toBlocking().forEach(System.out::println);
+    }
+
+    // artificial representations of IO work
+    static Observable<Integer> getDataAsync(int i) {
+        return getDataSync(i).subscribeOn(Schedulers.io());
+    }
+
+    static Observable<Integer> getDataSync(int i) {
+        return Observable.create((Subscriber<? super Integer> s) -> {
+            // simulate latency
+                try {
+                    Thread.sleep(1000);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+                s.onNext(i);
+                s.onCompleted();
+            });
+    }
+}
+```
+
+#### Removed Observable.parallelMerge
+
+Similar to the `parallel` operator `parallelMerge` was confusing and was a failed experiment so was removed.
+
+#### Removed publishLast/initialValue
+
+Removed `publishLast` since it can be done with `takeLast(1).publish()`.
+Removed any method overload that took an initial value since the `startWith` operator already allows that generically.
+
+#### Removed Utility Methods/Classes
+
+A handful of utility classes and methods that are not core to the purpose of RxJava were removed. This was preferred over having to constantly make arbitrary decisions about what utility methods should be included versus not while balancing the other goal of keeping the library small and focused.
+
+The changes can be seen [here](https://github.com/ReactiveX/RxJava/pull/1809/files) and [here](https://github.com/ReactiveX/RxJava/pull/1806/files)
+
+#### Observable.compose
+
+The `Transformer` signature used by `compose` was changed from:
+
+```java
+public static interface Transformer<T, R> extends Func1<Observable<? extends T>, Observable<? extends R>>
+```
+
+to 
+
+```java
+public static interface Transformer<T, R> extends Func1<Observable<T>, Observable<? extends R>>
+```
+
+This was done after finding issues with the generics that prevented it from easily being used.
+
+
+#### Removed Observable.multicast
+
+The `multicast` operator was removed in favor of directly using `publish()`, `replay()`, `share()` or `cache()`.
+This was done because `multicast` could not be made to work with reactive pull backpressure due to its use of `Subject`. The `publish` and `replay` operators on the other hand can have their implementations changed to not use a `Subject` and then support backpressure. The `publish()` operator has since been updated to support backpressure.
+
+
+#### Removed Observable.*withIndex
+
+The `takeWhileWithIndex` and `skipWhileWithIndex` operators were removed since `zipWith(Observable.range(Integer.MAX_VALUE))` can be used on any `Observable` to get an index value. Any operator may want "withIndex" so it didn't make sense to have API clutter with some and certainly not all would have this variant added. 
+
+#### Observable.longCount -> countLong
+
+The `longCount` operator was renamed to `countLong` so it shows up alphabetically next to `count`.
+
+
+
+#### Full List of Changes
+
+* [Pull 1886] (https://github.com/ReactiveX/RxJava/pull/1886) Buffer with time and merge fix
+* [Pull 1882] (https://github.com/ReactiveX/RxJava/pull/1882) Remove Unused Scheduler.parallelism
+* [Pull 1884] (https://github.com/ReactiveX/RxJava/pull/1884) Fix Scan/Reduce/Collect Factory Ambiguity 
+* [Pull 1866] (https://github.com/ReactiveX/RxJava/pull/1866) Fix memory leak in bounded ReplaySubject due to retaining the node index
+* [Pull 1834] (https://github.com/ReactiveX/RxJava/pull/1834) Subject.toSerialized
+* [Pull 1832] (https://github.com/ReactiveX/RxJava/pull/1832) Fix Take Early Unsubscription Causing Interrupts
+* [Pull 1835] (https://github.com/ReactiveX/RxJava/pull/1835) Scan/Reduce with Seed Factory
+* [Pull 1836] (https://github.com/ReactiveX/RxJava/pull/1836) Reduce Ring Buffer Default Sizes (and lower for Android)
+* [Pull 1833] (https://github.com/ReactiveX/RxJava/pull/1833) Fix Thread Safety for Unsubscribe of Window
+* [Pull 1827] (https://github.com/ReactiveX/RxJava/pull/1827) CacheThreadScheduler Evictor should Check Removal
+* [Pull 1830] (https://github.com/ReactiveX/RxJava/pull/1830) Fix mergeDelayError Handling of Error in Parent Observable
+* [Pull 1829] (https://github.com/ReactiveX/RxJava/pull/1829) Fix Window by Count Unsubscribe Behavior
+* [Pull 1788] (https://github.com/ReactiveX/RxJava/pull/1788) Remove PublishLast/InitialValue
+* [Pull 1796] (https://github.com/ReactiveX/RxJava/pull/1796) Improve TestSubject Javadoc
+* [Pull 1803] (https://github.com/ReactiveX/RxJava/pull/1803) Print full classname (inner class support) and fix enum output
+* [Pull 1802] (https://github.com/ReactiveX/RxJava/pull/1802) add hasObservers method to Subjects
+* [Pull 1806] (https://github.com/ReactiveX/RxJava/pull/1806) Remove Unnecessary Utilities
+* [Pull 1809] (https://github.com/ReactiveX/RxJava/pull/1809) Remove Utility Functions from Public API
+* [Pull 1813] (https://github.com/ReactiveX/RxJava/pull/1813) Fix issue #1812 that zip may swallow requests
+* [Pull 1817] (https://github.com/ReactiveX/RxJava/pull/1817) Fix Synchronous OnSubscribe Exception Skips Operators
+* [Pull 1819] (https://github.com/ReactiveX/RxJava/pull/1819) Fix Concat Breaks with Double onCompleted
+* [Pull 1771] (https://github.com/ReactiveX/RxJava/pull/1771) On error return backpressure
+* [Pull 1776] (https://github.com/ReactiveX/RxJava/pull/1776) Observable.compose Generics
+* [Pull 1778] (https://github.com/ReactiveX/RxJava/pull/1778) Change Transformer to Func1<Observable<T>, Observable<R>>
+* [Pull 1775] (https://github.com/ReactiveX/RxJava/pull/1775) BlockingOperatorNextTest.testSingleSourceManyIterators fix
+* [Pull 1784] (https://github.com/ReactiveX/RxJava/pull/1784) Publish with Backpressure
+* [Pull 1786] (https://github.com/ReactiveX/RxJava/pull/1786) Remove Multicast
+* [Pull 1787] (https://github.com/ReactiveX/RxJava/pull/1787) Remove *withIndex Operators
+* [Pull 1789] (https://github.com/ReactiveX/RxJava/pull/1789) GroupedObservable.from/create
+* [Pull 1793] (https://github.com/ReactiveX/RxJava/pull/1793) Take/Redo Unsubscribe
+* [Pull 1767] (https://github.com/ReactiveX/RxJava/pull/1767) ExecutorScheduler delivers uncaught exceptions
+* [Pull 1765] (https://github.com/ReactiveX/RxJava/pull/1765) backpressure support in onErrorResumeNext* operators
+* [Pull 1766] (https://github.com/ReactiveX/RxJava/pull/1766) Unhandled errors go to UncaughtExceptionHandler
+* [Pull 1755] (https://github.com/ReactiveX/RxJava/pull/1755) OnSubscribeRefCount with Synchronous Support
+* [Pull 1750] (https://github.com/ReactiveX/RxJava/pull/1750) Fix NPE when iterable is null
+* [Pull 1745] (https://github.com/ReactiveX/RxJava/pull/1745) SerializedSubject
+* [Pull 1746] (https://github.com/ReactiveX/RxJava/pull/1746) Fatal System.err Logs on Unhandled Exceptions
+* [Pull 1743] (https://github.com/ReactiveX/RxJava/pull/1743) Subject Error Handling
+* [Pull 1742] (https://github.com/ReactiveX/RxJava/pull/1742) EmptyObserver and TestObserver
+* [Pull 1740] (https://github.com/ReactiveX/RxJava/pull/1740) longCount -> countLong
+* [Pull 1736] (https://github.com/ReactiveX/RxJava/pull/1736) Fix TrampolineScheduler NullPointerException
+* [Pull 1738] (https://github.com/ReactiveX/RxJava/pull/1738) Delay Operator with Reactive Pull Backpressure
+* [Pull 1739] (https://github.com/ReactiveX/RxJava/pull/1739) Fix Slow Non-deterministic Test
+* [Pull 1731] (https://github.com/ReactiveX/RxJava/pull/1731) Remove Unused Code
+* [Pull 1733] (https://github.com/ReactiveX/RxJava/pull/1733) Move To Proper Location
+* [Pull 1747] (https://github.com/ReactiveX/RxJava/pull/1747) Cleanup: final and utility classes
+* [Pull 1729] (https://github.com/ReactiveX/RxJava/pull/1729) CombineLatest: Request Up When Dropping Values
+* [Pull 1728] (https://github.com/ReactiveX/RxJava/pull/1728) ObserveOn Error Propagation
+* [Pull 1727] (https://github.com/ReactiveX/RxJava/pull/1727) Proposed groupBy/groupByUntil Changes
+* [Pull 1726] (https://github.com/ReactiveX/RxJava/pull/1726) Fix Merge: backpressure + scalarValueQueue don't play nicely
+* [Pull 1720] (https://github.com/ReactiveX/RxJava/pull/1720) Change repeatWhen and retryWhen signatures.
+* [Pull 1719] (https://github.com/ReactiveX/RxJava/pull/1719) Fix Bug in the onBackpressure operators
+* [Pull 1687] (https://github.com/ReactiveX/RxJava/pull/1687) Don't allocate an empty ArrayList for each Observable.empty call
+* [Pull 1705] (https://github.com/ReactiveX/RxJava/pull/1705) Fix null-emitting combineLatest
+* [Pull 1683] (https://github.com/ReactiveX/RxJava/pull/1683) ObserveOn Error Handling
+* [Pull 1686] (https://github.com/ReactiveX/RxJava/pull/1686) Fix Rx serialization bug in takeUntil again and the concurrent issue in BufferUntilSubscriber
+* [Pull 1701] (https://github.com/ReactiveX/RxJava/pull/1701) Fix the compose generics
+* [Pull 1712] (https://github.com/ReactiveX/RxJava/pull/1712) Fixing regression in mergeDelayError
+* [Pull 1716] (https://github.com/ReactiveX/RxJava/pull/1716) Remove Observable.Parallel
+* [Pull 1667] (https://github.com/ReactiveX/RxJava/pull/1667) Fix the bug that Switch doesn't propagate 'unsubscribe'
+* [Pull 1659] (https://github.com/ReactiveX/RxJava/pull/1659) OperatorScan should check for MAX_VALUE on request
+* [Pull 1657] (https://github.com/ReactiveX/RxJava/pull/1657) Ignore furthur messages after entering terminate state
+* [Pull 1669] (https://github.com/ReactiveX/RxJava/pull/1669) Error Handling Unsubscribe and Terminal State
+* [Pull 1656] (https://github.com/ReactiveX/RxJava/pull/1656) Make TakeUntil obey Rx serialization contract
+* [Pull 1652] (https://github.com/ReactiveX/RxJava/pull/1652) Operator Scan Backpressure Fix
+* [Pull 1645] (https://github.com/ReactiveX/RxJava/pull/1645) Remove ParallelMerge
+
+
+### Version 1.0.0-rc.12 – November 17th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.12%7C)) ###
+
+* [Pull 1886] (https://github.com/ReactiveX/RxJava/pull/1886) Buffer with time and merge fix
+
+### Version 1.0.0-rc.11 – November 15th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.11%7C)) ###
+
+* [Pull 1882] (https://github.com/ReactiveX/RxJava/pull/1882) Remove Unused Scheduler.parallelism
+* [Pull 1884] (https://github.com/ReactiveX/RxJava/pull/1884) Fix Scan/Reduce/Collect Factory Ambiguity 
+* [Pull 1866] (https://github.com/ReactiveX/RxJava/pull/1866) Fix memory leak in bounded ReplaySubject due to retaining the node index
+
+### Version 0.20.7 – November 11th 2014 ([Maven Central](http://search.maven.org/#search%7Cga%7C1%7Cg%3A%22com.netflix.rxjava%22%20AND%20v%3A%220.20.7%22)) ###
+
+* [Pull 1863] (https://github.com/ReactiveX/RxJava/pull/1863) Fix Concat Breaks with Double onCompleted
+
+### Version 1.0.0-rc.10 – November 8th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.10%7C)) ###
+
+* [Pull 1834] (https://github.com/ReactiveX/RxJava/pull/1834) Subject.toSerialized
+* [Pull 1832] (https://github.com/ReactiveX/RxJava/pull/1832) Fix Take Early Unsubscription Causing Interrupts
+* [Pull 1835] (https://github.com/ReactiveX/RxJava/pull/1835) Scan/Reduce with Seed Factory
+* [Pull 1836] (https://github.com/ReactiveX/RxJava/pull/1836) Reduce Ring Buffer Default Sizes (and lower for Android)
+* [Pull 1833] (https://github.com/ReactiveX/RxJava/pull/1833) Fix Thread Safety for Unsubscribe of Window
+* [Pull 1827] (https://github.com/ReactiveX/RxJava/pull/1827) CacheThreadScheduler Evictor should Check Removal
+* [Pull 1830] (https://github.com/ReactiveX/RxJava/pull/1830) Fix mergeDelayError Handling of Error in Parent Observable
+* [Pull 1829] (https://github.com/ReactiveX/RxJava/pull/1829) Fix Window by Count Unsubscribe Behavior
+
+### Version 1.0.0-rc.9 – November 2nd 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.9%7C)) ###
+
+* [Pull 1788] (https://github.com/ReactiveX/RxJava/pull/1788) Remove PublishLast/InitialValue
+* [Pull 1796] (https://github.com/ReactiveX/RxJava/pull/1796) Improve TestSubject Javadoc
+* [Pull 1803] (https://github.com/ReactiveX/RxJava/pull/1803) Print full classname (inner class support) and fix enum output
+* [Pull 1802] (https://github.com/ReactiveX/RxJava/pull/1802) add hasObservers method to Subjects
+* [Pull 1806] (https://github.com/ReactiveX/RxJava/pull/1806) Remove Unnecessary Utilities
+* [Pull 1809] (https://github.com/ReactiveX/RxJava/pull/1809) Remove Utility Functions from Public API
+* [Pull 1813] (https://github.com/ReactiveX/RxJava/pull/1813) Fix issue #1812 that zip may swallow requests
+* [Pull 1817] (https://github.com/ReactiveX/RxJava/pull/1817) Fix Synchronous OnSubscribe Exception Skips Operators
+* [Pull 1819] (https://github.com/ReactiveX/RxJava/pull/1819) Fix Concat Breaks with Double onCompleted
+
+### Version 1.0.0-rc.8 – October 23rd 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.8%7C)) ###
+
+* [Pull 1771] (https://github.com/ReactiveX/RxJava/pull/1771) On error return backpressure
+* [Pull 1776] (https://github.com/ReactiveX/RxJava/pull/1776) Observable.compose Generics
+* [Pull 1778] (https://github.com/ReactiveX/RxJava/pull/1778) Change Transformer to Func1<Observable<T>, Observable<R>>
+* [Pull 1775] (https://github.com/ReactiveX/RxJava/pull/1775) BlockingOperatorNextTest.testSingleSourceManyIterators fix
+* [Pull 1784] (https://github.com/ReactiveX/RxJava/pull/1784) Publish with Backpressure
+* [Pull 1786] (https://github.com/ReactiveX/RxJava/pull/1786) Remove Multicast
+* [Pull 1787] (https://github.com/ReactiveX/RxJava/pull/1787) Remove *withIndex Operators
+* [Pull 1789] (https://github.com/ReactiveX/RxJava/pull/1789) GroupedObservable.from/create
+* [Pull 1793] (https://github.com/ReactiveX/RxJava/pull/1793) Take/Redo Unsubscribe
+
+### Version 1.0.0-rc.7 – October 16th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.7%7C)) ###
+
+* [Pull 1767] (https://github.com/ReactiveX/RxJava/pull/1767) ExecutorScheduler delivers uncaught exceptions
+* [Pull 1765] (https://github.com/ReactiveX/RxJava/pull/1765) backpressure support in onErrorResumeNext* operators
+* [Pull 1766] (https://github.com/ReactiveX/RxJava/pull/1766) Unhandled errors go to UncaughtExceptionHandler
+* [Pull 1755] (https://github.com/ReactiveX/RxJava/pull/1755) OnSubscribeRefCount with Synchronous Support
+* [Pull 1750] (https://github.com/ReactiveX/RxJava/pull/1750) Fix NPE when iterable is null
+
+### Version 0.20.6 – October 15th 2014 ([Maven Central](http://search.maven.org/#search%7Cga%7C1%7Cg%3A%22com.netflix.rxjava%22%20AND%20v%3A%220.20.6%22)) ###
+
+* [Pull 1721] (https://github.com/ReactiveX/RxJava/pull/1721) Bug in the onBackpressure operators 
+* [Pull 1695] (https://github.com/ReactiveX/RxJava/pull/1695) rewrite OnSubscribeRefCount to handle synchronous source
+* [Pull 1761] (https://github.com/ReactiveX/RxJava/pull/1761) Fix null-emitting combineLatest
+
+### Version 1.0.0-rc.6 – October 10th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.6%7C)) ###
+
+This release is primarily bug fixes along with API cleanup by renaming `longCount` to `countLong` to be alphabetically sorted alongside `count`.
+
+* [Pull 1745] (https://github.com/ReactiveX/RxJava/pull/1745) SerializedSubject
+* [Pull 1746] (https://github.com/ReactiveX/RxJava/pull/1746) Fatal System.err Logs on Unhandled Exceptions
+* [Pull 1743] (https://github.com/ReactiveX/RxJava/pull/1743) Subject Error Handling
+* [Pull 1742] (https://github.com/ReactiveX/RxJava/pull/1742) EmptyObserver and TestObserver
+* [Pull 1740] (https://github.com/ReactiveX/RxJava/pull/1740) longCount -> countLong
+* [Pull 1736] (https://github.com/ReactiveX/RxJava/pull/1736) Fix TrampolineScheduler NullPointerException
+* [Pull 1738] (https://github.com/ReactiveX/RxJava/pull/1738) Delay Operator with Reactive Pull Backpressure
+* [Pull 1739] (https://github.com/ReactiveX/RxJava/pull/1739) Fix Slow Non-deterministic Test
+* [Pull 1731] (https://github.com/ReactiveX/RxJava/pull/1731) Remove Unused Code
+* [Pull 1733] (https://github.com/ReactiveX/RxJava/pull/1733) Move To Proper Location
+* [Pull 1747] (https://github.com/ReactiveX/RxJava/pull/1747) Cleanup: final and utility classes
+
+### Version 1.0.0-rc.5 – October 6th 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.5%7C)) ###
+
+* [Pull 1729] (https://github.com/ReactiveX/RxJava/pull/1729) CombineLatest: Request Up When Dropping Values
+* [Pull 1728] (https://github.com/ReactiveX/RxJava/pull/1728) ObserveOn Error Propagation
+* [Pull 1727] (https://github.com/ReactiveX/RxJava/pull/1727) Proposed groupBy/groupByUntil Changes
+* [Pull 1726] (https://github.com/ReactiveX/RxJava/pull/1726) Fix Merge: backpressure + scalarValueQueue don't play nicely
+* [Pull 1720] (https://github.com/ReactiveX/RxJava/pull/1720) Change repeatWhen and retryWhen signatures.
+* [Pull 1719] (https://github.com/ReactiveX/RxJava/pull/1719) Fix Bug in the onBackpressure operators
+
+### groupBy/groupByUntil
+
+The `groupByUntil` operator was removed by collapsing its behavior into `groupBy`. Previously on `groupBy` when a child `GroupedObservable` was unsubscribed it would internally retain the state and ignore all future `onNext` for that key.
+
+This matched behavior in Rx.Net but was found to be non-obvious and almost everyone using `groupBy` on long-lived streams actually wanted the behavior of `groupByUntil` where an unsubscribed `GroupedObservable` would clean up the resources and then if `onNext` for that key arrived again a new `GroupedObservable` would be emitted.
+
+Adding backpressure (reactive pull) to `groupByUntil` was found to not work easily with its signatures so before 1.0 Final it was decided to collapse `groupBy` and `groupByUntil`. Further details on this can be found in [Pull Request 1727](https://github.com/ReactiveX/RxJava/pull/1727).
+
+Here is an example of how `groupBy` now behaves when a child `GroupedObservable` is unsubscribed (using `take` here):
+
+```java
+// odd/even into lists of 10
+Observable.range(1, 100)
+        .groupBy(n -> n % 2 == 0)
+        .flatMap(g -> {
+            return g.take(10).toList();
+        }).forEach(System.out::println);
+```
+
+```
+[1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
+[2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
+[21, 23, 25, 27, 29, 31, 33, 35, 37, 39]
+[22, 24, 26, 28, 30, 32, 34, 36, 38, 40]
+[41, 43, 45, 47, 49, 51, 53, 55, 57, 59]
+[42, 44, 46, 48, 50, 52, 54, 56, 58, 60]
+[61, 63, 65, 67, 69, 71, 73, 75, 77, 79]
+[62, 64, 66, 68, 70, 72, 74, 76, 78, 80]
+[81, 83, 85, 87, 89, 91, 93, 95, 97, 99]
+[82, 84, 86, 88, 90, 92, 94, 96, 98, 100]
+```
+
+Previously this would have only emitted 2 groups and ignored all subsequent values:
+
+```
+[1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
+[2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
+```
+
+On a finite stream, similar behavior of the previous `groupBy` implementation that would filter can be achieved like this:
+
+```java
+//odd/even into lists of 10
+Observable.range(1, 100)
+        .groupBy(n -> n % 2 == 0)
+        .flatMap(g -> {
+            return g.filter(i -> i <= 20).toList();
+        }).forEach(System.out::println);
+```
+
+```
+[1, 3, 5, 7, 9, 11, 13, 15, 17, 19]
+[2, 4, 6, 8, 10, 12, 14, 16, 18, 20]
+```
+
+That however does allow the stream to complete (which may not be wanted).
+
+To unsubscribe here are some choices that get the same output but efficiently unsubscribe up so the source only emits 40 values:
+
+```java
+Observable.timer(0, 1, TimeUnit.MILLISECONDS)
+        .groupBy(n -> n % 2 == 0)
+        .flatMap(g -> {
+            return g.take(10).toList();
+        }).take(2).toBlocking().forEach(System.out::println);
+```
+
+or
+
+```java
+Observable.timer(0, 1, TimeUnit.MILLISECONDS)
+        .take(20)
+        .groupBy(n -> n % 2 == 0)
+        .flatMap(g -> {
+            return g.toList();
+        }).toBlocking().forEach(System.out::println);
+```        
+
+These show that now `groupBy` composes like any other operator without the nuanced and hidden behavior of ignoring values after a child `GroupedObservable` is unsubscribed.
+
+Uses of `groupByUntil` can now all be done by just using operators like `take`, `takeWhile` and `takeUntil` on the `GroupedObservable` directly, such as this:
+
+```java
+Observable.from(Arrays.asList("a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c"))
+        .groupBy(n -> n)
+        .flatMap(g -> {
+            return g.take(3).reduce((s, s2) -> s + s2);
+        }).forEach(System.out::println);
+```
+```
+aaa
+bbb
+ccc
+aaa
+bbb
+ccc
+```
+
+
+
+### retryWhen/repeatWhen
+
+The `retryWhen` and `repeatWhen` method signatures both emitted a `Observable<Notification>` type which could be queried to represent either `onError` in the `retryWhen` case or `onCompleted` in the `repeatWhen` case. This was found to be confusing and unnecessary. The signatures were changed to emit `Observable<Throwable>` for `retryWhen` and `Observable<Void>` for `repeatWhen` to better signal the type of notification they are emitting without the need to then query the `Notification`.
+
+The following contrived examples shows how the `Observable<Throwable>` is used to get the error that occurred when deciding to retry:
+
+```java
+    AtomicInteger count = new AtomicInteger();
+    Observable.create((Subscriber<? super String> s) -> {
+        if (count.getAndIncrement() == 0) {
+            s.onError(new RuntimeException("always fails"));
+        } else {
+            s.onError(new IllegalArgumentException("user error"));
+        }
+    }).retryWhen(attempts -> {
+        return attempts.flatMap(throwable -> {
+            if (throwable instanceof IllegalArgumentException) {
+                System.out.println("don't retry on IllegalArgumentException... allow failure");
+                return Observable.error(throwable);
+            } else {
+                System.out.println(throwable + " => retry after 1 second");
+                return Observable.timer(1, TimeUnit.SECONDS);
+            }
+        });
+    })
+    .toBlocking().forEach(System.out::println);
+```
+
+### Version 1.0.0-rc.4 – October 2nd 2014 ([Maven Central](http://search.maven.org/#artifactdetails%7Cio.reactivex%7Crxjava%7C1.0.0-rc.4%7C)) ###
 
 * [Pull 1687] (https://github.com/ReactiveX/RxJava/pull/1687) Don't allocate an empty ArrayList for each Observable.empty call
 * [Pull 1705] (https://github.com/ReactiveX/RxJava/pull/1705) Fix null-emitting combineLatest
@@ -10,7 +1229,7 @@
 * [Pull 1712] (https://github.com/ReactiveX/RxJava/pull/1712) Fixing regression in mergeDelayError
 * [Pull 1716] (https://github.com/ReactiveX/RxJava/pull/1716) Remove Observable.Parallel
 
-### Version 0.20.5 ([Maven Central](http://search.maven.org/#search%7Cga%7C1%7Cg%3A%22com.netflix.rxjava%22%20AND%20v%3A%220.20.5%22)) ###
+### Version 0.20.5 – October 2nd 2014 ([Maven Central](http://search.maven.org/#search%7Cga%7C1%7Cg%3A%22com.netflix.rxjava%22%20AND%20v%3A%220.20.5%22)) ###
 
 * [Pull 1686] (https://github.com/ReactiveX/RxJava/pull/1686) Fix Rx serialization bug in takeUntil again and the concurrent issue in BufferUntilSubscriber
 * [Pull 1701] (https://github.com/ReactiveX/RxJava/pull/1701) Fix the compose generics

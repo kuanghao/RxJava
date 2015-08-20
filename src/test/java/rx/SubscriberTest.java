@@ -16,7 +16,13 @@
 package rx;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -340,7 +346,6 @@ public class SubscriberTest {
 
             @Override
             public void onNext(Integer t) {
-                System.out.println(t);
                 request(1);
             }
 
@@ -372,7 +377,6 @@ public class SubscriberTest {
 
             @Override
             public void onNext(Integer t) {
-                System.out.println(t);
                 request(1);
             }
 
@@ -408,7 +412,6 @@ public class SubscriberTest {
 
                     @Override
                     public void onNext(Integer t) {
-                        System.out.println(t);
                         child.onNext(t);
                         request(1);
                     }
@@ -419,5 +422,90 @@ public class SubscriberTest {
         }).subscribe();
 
         assertEquals(1, c.get());
+    }
+    
+    @Test
+    public void testNegativeRequestThrowsIllegalArgumentException() throws InterruptedException {
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicReference<Throwable> exception = new AtomicReference<Throwable>();
+        Observable.just(1,2,3,4).subscribe(new Subscriber<Integer>() {
+
+            @Override
+            public void onStart() {
+                request(1);
+            }
+            
+            @Override
+            public void onCompleted() {
+                
+            }
+
+            @Override
+            public void onError(Throwable e) {
+               exception.set(e);
+               latch.countDown();
+            }
+
+            @Override
+            public void onNext(Integer t) {
+                request(-1);
+                request(1);
+            }});
+        assertTrue(latch.await(10, TimeUnit.SECONDS));
+        assertTrue(exception.get() instanceof IllegalArgumentException);
+    }
+    
+    @Test
+    public void testOnStartRequestsAreAdditive() {
+        final List<Integer> list = new ArrayList<Integer>();
+        Observable.just(1,2,3,4,5).subscribe(new Subscriber<Integer>() {
+            @Override
+            public void onStart() {
+                request(3);
+                request(2);
+            }
+            
+            @Override
+            public void onCompleted() {
+                
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                
+            }
+
+            @Override
+            public void onNext(Integer t) {
+                list.add(t);
+            }});
+        assertEquals(Arrays.asList(1,2,3,4,5), list);
+    }
+    
+    @Test
+    public void testOnStartRequestsAreAdditiveAndOverflowBecomesMaxValue() {
+        final List<Integer> list = new ArrayList<Integer>();
+        Observable.just(1,2,3,4,5).subscribe(new Subscriber<Integer>() {
+            @Override
+            public void onStart() {
+                request(2);
+                request(Long.MAX_VALUE-1);
+            }
+            
+            @Override
+            public void onCompleted() {
+                
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                
+            }
+
+            @Override
+            public void onNext(Integer t) {
+                list.add(t);
+            }});
+        assertEquals(Arrays.asList(1,2,3,4,5), list);
     }
 }

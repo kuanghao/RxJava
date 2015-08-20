@@ -48,14 +48,16 @@ import org.mockito.MockitoAnnotations;
 import rx.Observable.OnSubscribe;
 import rx.Observable.Transformer;
 import rx.exceptions.OnErrorNotImplementedException;
-import rx.functions.Action0;
 import rx.functions.Action1;
 import rx.functions.Action2;
+import rx.functions.Func0;
 import rx.functions.Func1;
 import rx.functions.Func2;
 import rx.observables.ConnectableObservable;
 import rx.observers.TestSubscriber;
 import rx.schedulers.TestScheduler;
+import rx.subjects.ReplaySubject;
+import rx.subjects.Subject;
 import rx.subscriptions.BooleanSubscription;
 
 public class ObservableTests {
@@ -501,58 +503,6 @@ public class ObservableTests {
     }
 
     @Test
-    public void testPublish() throws InterruptedException {
-        final AtomicInteger counter = new AtomicInteger();
-        ConnectableObservable<String> o = Observable.create(new OnSubscribe<String>() {
-
-            @Override
-            public void call(final Subscriber<? super String> observer) {
-                new Thread(new Runnable() {
-
-                    @Override
-                    public void run() {
-                        counter.incrementAndGet();
-                        observer.onNext("one");
-                        observer.onCompleted();
-                    }
-                }).start();
-            }
-        }).publish();
-
-        final CountDownLatch latch = new CountDownLatch(2);
-
-        // subscribe once
-        o.subscribe(new Action1<String>() {
-
-            @Override
-            public void call(String v) {
-                assertEquals("one", v);
-                latch.countDown();
-            }
-        });
-
-        // subscribe again
-        o.subscribe(new Action1<String>() {
-
-            @Override
-            public void call(String v) {
-                assertEquals("one", v);
-                latch.countDown();
-            }
-        });
-
-        Subscription s = o.connect();
-        try {
-            if (!latch.await(1000, TimeUnit.MILLISECONDS)) {
-                fail("subscriptions did not receive values");
-            }
-            assertEquals(1, counter.get());
-        } finally {
-            s.unsubscribe();
-        }
-    }
-
-    @Test
     public void testPublishLast() throws InterruptedException {
         final AtomicInteger count = new AtomicInteger();
         ConnectableObservable<String> connectable = Observable.create(new OnSubscribe<String>() {
@@ -568,7 +518,7 @@ public class ObservableTests {
                     }
                 }).start();
             }
-        }).publishLast();
+        }).takeLast(1).publish();
 
         // subscribe once
         final CountDownLatch latch = new CountDownLatch(1);
@@ -1016,23 +966,47 @@ public class ObservableTests {
 
     @Test
     public void testCollectToList() {
-        List<Integer> list = Observable.just(1, 2, 3).collect(new ArrayList<Integer>(), new Action2<List<Integer>, Integer>() {
+        Observable<List<Integer>> o = Observable.just(1, 2, 3).collect(new Func0<List<Integer>>() {
+
+            @Override
+            public List<Integer> call() {
+                return new ArrayList<Integer>();
+            }
+            
+        }, new Action2<List<Integer>, Integer>() {
 
             @Override
             public void call(List<Integer> list, Integer v) {
                 list.add(v);
             }
-        }).toBlocking().last();
+        });
+        
+        List<Integer> list =  o.toBlocking().last();
 
         assertEquals(3, list.size());
         assertEquals(1, list.get(0).intValue());
         assertEquals(2, list.get(1).intValue());
         assertEquals(3, list.get(2).intValue());
+        
+        // test multiple subscribe
+        List<Integer> list2 =  o.toBlocking().last();
+
+        assertEquals(3, list2.size());
+        assertEquals(1, list2.get(0).intValue());
+        assertEquals(2, list2.get(1).intValue());
+        assertEquals(3, list2.get(2).intValue());
     }
 
     @Test
     public void testCollectToString() {
-        String value = Observable.just(1, 2, 3).collect(new StringBuilder(), new Action2<StringBuilder, Integer>() {
+        String value = Observable.just(1, 2, 3).collect(new Func0<StringBuilder>() {
+
+            @Override
+            public StringBuilder call() {
+                return new StringBuilder();
+            }
+            
+        }, new Action2<StringBuilder, Integer>() {
 
             @Override
             public void call(StringBuilder sb, Integer v) {
@@ -1080,9 +1054,9 @@ public class ObservableTests {
 
     @Test
     public void testTakeWhileToList() {
-        int[] nums = {1, 2, 3};
+        final int expectedCount = 3;
         final AtomicInteger count = new AtomicInteger();
-        for(final int n: nums) {
+        for (int i = 0;i < expectedCount; i++) {
             Observable
                     .just(Boolean.TRUE, Boolean.FALSE)
                     .takeWhile(new Func1<Boolean, Boolean>() {
@@ -1100,7 +1074,7 @@ public class ObservableTests {
                     })
                     .subscribe();
         }
-        assertEquals(nums.length, count.get());
+        assertEquals(expectedCount, count.get());
     }
     
     @Test
@@ -1109,7 +1083,7 @@ public class ObservableTests {
         Observable.just(1, 2, 3).compose(new Transformer<Integer, String>() {
 
             @Override
-            public Observable<String> call(Observable<? extends Integer> t1) {
+            public Observable<String> call(Observable<Integer> t1) {
                 return t1.map(new Func1<Integer, String>() {
                     
                     @Override
@@ -1125,5 +1099,76 @@ public class ObservableTests {
         ts.assertNoErrors();
         ts.assertReceivedOnNext(Arrays.asList("1", "2", "3"));
     }
+    
+    @Test
+    public void testErrorThrownIssue1685() {
+        Subject<Object, Object> subject = ReplaySubject.create();
 
+        Observable.error(new RuntimeException("oops"))
+            .materialize()
+            .delay(1, TimeUnit.SECONDS)
+            .dematerialize()
+            .subscribe(subject);
+
+        subject.subscribe();
+        subject.materialize().toBlocking().first();
+
+        System.out.println("Done");
+    }
+
+    @Test
+    public void testEmptyIdentity() {
+        assertEquals(Observable.empty(), Observable.empty());
+    }
+    
+    @Test
+    public void testEmptyIsEmpty() {
+        Observable.<Integer>empty().subscribe(w);
+        
+        verify(w).onCompleted();
+        verify(w, never()).onNext(any(Integer.class));
+        verify(w, never()).onError(any(Throwable.class));
+    }
+    
+    @Test // cf. https://github.com/ReactiveX/RxJava/issues/2599
+    public void testSubscribingSubscriberAsObserverMaintainsSubscriptionChain() {
+        TestSubscriber<Object> subscriber = new TestSubscriber<Object>();
+        Subscription subscription = Observable.just("event").subscribe((Observer<Object>) subscriber);
+        subscription.unsubscribe();
+
+        subscriber.assertUnsubscribed();
+    }
+
+    @Test(expected=OnErrorNotImplementedException.class)
+    public void testForEachWithError() {
+        Observable.error(new Exception("boo"))
+        //
+        .forEach(new Action1<Object>() {
+            @Override
+            public void call(Object t) {
+                //do nothing
+            }});
+    }
+    
+    @Test(expected=IllegalArgumentException.class)
+    public void testForEachWithNull() {
+        Observable.error(new Exception("boo"))
+        //
+        .forEach(null);
+    }
+    
+    @Test
+    public void testExtend() {
+        final TestSubscriber<Object> subscriber = new TestSubscriber<Object>();
+        final Object value = new Object();
+        Observable.just(value).x(new Func1<OnSubscribe<Object>,Object>(){
+            @Override
+            public Object call(OnSubscribe<Object> onSubscribe) {
+                onSubscribe.call(subscriber);
+                subscriber.assertNoErrors();
+                subscriber.assertCompleted();
+                subscriber.assertValue(value);
+                return subscriber.getOnNextEvents().get(0);
+            }});
+    }
 }

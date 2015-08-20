@@ -21,7 +21,6 @@ import static org.junit.Assert.assertNotNull;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
-import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -148,7 +147,6 @@ public class CompositeExceptionTest {
     private static void assertNoCircularReferences(Throwable ex) {
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         PrintStream printStream = new PrintStream(baos);
-        StringWriter writer = new StringWriter();
         ex.printStackTrace(printStream);
         assertFalse(baos.toString().contains("CIRCULAR REFERENCE"));
     }
@@ -166,5 +164,18 @@ public class CompositeExceptionTest {
                 }
             }
         }
+    }
+    
+    @Test
+    public void testNullCollection() {
+        CompositeException composite = new CompositeException(null);
+        composite.getCause();
+        composite.printStackTrace();
+    }
+    @Test
+    public void testNullElement() {
+        CompositeException composite = new CompositeException(Arrays.asList((Throwable)null));
+        composite.getCause();
+        composite.printStackTrace();
     }
 }

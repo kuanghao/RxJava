@@ -15,11 +15,10 @@
  */
 package rx.observables;
 
-import rx.Observable;
-import rx.Subscriber;
-import rx.Subscription;
-import rx.functions.Action1;
-import rx.internal.operators.OnSubscribeRefCount;
+import rx.*;
+import rx.annotations.Experimental;
+import rx.functions.*;
+import rx.internal.operators.*;
 
 /**
  * A {@code ConnectableObservable} resembles an ordinary {@link Observable}, except that it does not begin
@@ -47,6 +46,7 @@ public abstract class ConnectableObservable<T> extends Observable<T> {
      * To disconnect from a synchronous source, use the {@link #connect(rx.functions.Action1)} method.
      *
      * @return the subscription representing the connection
+     * @see <a href="http://reactivex.io/documentation/operators/connect.html">ReactiveX documentation: Connect</a>
      */
     public final Subscription connect() {
         final Subscription[] out = new Subscription[1];
@@ -65,6 +65,7 @@ public abstract class ConnectableObservable<T> extends Observable<T> {
      * @param connection
      *          the action that receives the connection subscription before the subscription to source happens
      *          allowing the caller to synchronously disconnect a synchronous source
+     * @see <a href="http://reactivex.io/documentation/operators/connect.html">ReactiveX documentation: Connect</a>
      */
     public abstract void connect(Action1<? super Subscription> connection);
 
@@ -73,8 +74,61 @@ public abstract class ConnectableObservable<T> extends Observable<T> {
      * is at least one subscription to this {@code ConnectableObservable}.
      * 
      * @return a {@link Observable}
+     * @see <a href="http://reactivex.io/documentation/operators/refcount.html">ReactiveX documentation: RefCount</a>
      */
     public Observable<T> refCount() {
         return create(new OnSubscribeRefCount<T>(this));
+    }
+    
+    /**
+     * Returns an Observable that automatically connects to this ConnectableObservable
+     * when the first Subscriber subscribes.
+     * 
+     * @return an Observable that automatically connects to this ConnectableObservable
+     *         when the first Subscriber subscribes
+     * @since (if this graduates from Experimental/Beta to supported, replace this parenthetical with the release number)
+     */
+    @Experimental
+    public Observable<T> autoConnect() {
+        return autoConnect(1);
+    }
+    /**
+     * Returns an Observable that automatically connects to this ConnectableObservable
+     * when the specified number of Subscribers subscribe to it.
+     * 
+     * @param numberOfSubscribers the number of subscribers to await before calling connect
+     *                            on the ConnectableObservable. A non-positive value indicates
+     *                            an immediate connection.
+     * @return an Observable that automatically connects to this ConnectableObservable
+     *         when the specified number of Subscribers subscribe to it
+     * @since (if this graduates from Experimental/Beta to supported, replace this parenthetical with the release number)
+     */
+    @Experimental
+    public Observable<T> autoConnect(int numberOfSubscribers) {
+        return autoConnect(numberOfSubscribers, Actions.empty());
+    }
+    
+    /**
+     * Returns an Observable that automatically connects to this ConnectableObservable
+     * when the specified number of Subscribers subscribe to it and calls the 
+     * specified callback with the Subscription associated with the established connection.
+     * 
+     * @param numberOfSubscribers the number of subscribers to await before calling connect
+     *                            on the ConnectableObservable. A non-positive value indicates
+     *                            an immediate connection.
+     * @param connection the callback Action1 that will receive the Subscription representing the
+     *                   established connection
+     * @return an Observable that automatically connects to this ConnectableObservable
+     *         when the specified number of Subscribers subscribe to it and calls the 
+     *         specified callback with the Subscription associated with the established connection
+     * @since (if this graduates from Experimental/Beta to supported, replace this parenthetical with the release number)
+     */
+    @Experimental
+    public Observable<T> autoConnect(int numberOfSubscribers, Action1<? super Subscription> connection) {
+        if (numberOfSubscribers <= 0) {
+            this.connect(connection);
+            return this;
+        }
+        return create(new OnSubscribeAutoConnect<T>(this, numberOfSubscribers, connection));
     }
 }

@@ -15,24 +15,21 @@
  */
 package rx.internal.operators;
 
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.*;
 
-import org.junit.Test;
+import java.util.Arrays;
 
-import rx.Observable;
+import org.junit.*;
+
+import rx.*;
 import rx.Observable.OnSubscribe;
-import rx.Observer;
-import rx.Subscriber;
-import rx.Subscription;
+import rx.exceptions.TestException;
 import rx.functions.Func1;
-import rx.functions.Func2;
-import rx.subjects.PublishSubject;
-import rx.subjects.Subject;
+import rx.observers.TestSubscriber;
+import rx.subjects.*;
 
 public class OperatorTakeWhileTest {
 
@@ -89,10 +86,12 @@ public class OperatorTakeWhileTest {
     @Test
     public void testTakeWhile2() {
         Observable<String> w = Observable.just("one", "two", "three");
-        Observable<String> take = w.takeWhileWithIndex(new Func2<String, Integer, Boolean>() {
+        Observable<String> take = w.takeWhile(new Func1<String, Boolean>() {
+            int index = 0;
+
             @Override
-            public Boolean call(String input, Integer index) {
-                return index < 2;
+            public Boolean call(String input) {
+                return index++ < 2;
             }
         });
 
@@ -158,10 +157,12 @@ public class OperatorTakeWhileTest {
 
         @SuppressWarnings("unchecked")
         Observer<String> observer = mock(Observer.class);
-        Observable<String> take = Observable.create(w).takeWhileWithIndex(new Func2<String, Integer, Boolean>() {
+        Observable<String> take = Observable.create(w).takeWhile(new Func1<String, Boolean>() {
+            int index = 0;
+
             @Override
-            public Boolean call(String s, Integer index) {
-                return index < 1;
+            public Boolean call(String s) {
+                return index++ < 1;
             }
         });
         take.subscribe(observer);
@@ -218,4 +219,64 @@ public class OperatorTakeWhileTest {
             System.out.println("done starting TestObservable thread");
         }
     }
+    
+    @Test
+    public void testBackpressure() {
+        Observable<Integer> source = Observable.range(1, 1000).takeWhile(new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer t1) {
+                return t1 < 100;
+            }
+        });
+        TestSubscriber<Integer> ts = new TestSubscriber<Integer>() {
+            @Override
+            public void onStart() {
+                request(5);
+            }
+        };
+        
+        source.subscribe(ts);
+        
+        ts.assertNoErrors();
+        ts.assertReceivedOnNext(Arrays.asList(1, 2, 3, 4, 5));
+        
+        ts.requestMore(5);
+
+        ts.assertNoErrors();
+        ts.assertReceivedOnNext(Arrays.asList(1, 2, 3, 4, 5, 6, 7, 8, 9, 10));
+    }
+    
+    @Test
+    public void testNoUnsubscribeDownstream() {
+        Observable<Integer> source = Observable.range(1, 1000).takeWhile(new Func1<Integer, Boolean>() {
+            @Override
+            public Boolean call(Integer t1) {
+                return t1 < 2;
+            }
+        });
+        TestSubscriber<Integer> ts = new TestSubscriber<Integer>();
+        
+        source.unsafeSubscribe(ts);
+        
+        ts.assertNoErrors();
+        ts.assertReceivedOnNext(Arrays.asList(1));
+        
+        Assert.assertFalse("Unsubscribed!", ts.isUnsubscribed());
+    }
+    
+    @Test
+    public void testErrorCauseIncludesLastValue() {
+        TestSubscriber<String> ts = new TestSubscriber<String>();
+        Observable.just("abc").takeWhile(new Func1<String, Boolean>() {
+            @Override
+            public Boolean call(String t1) {
+                throw new TestException();
+            }
+        }).subscribe(ts);
+        
+        ts.assertTerminalEvent();
+        ts.assertNoValues();
+        assertTrue(ts.getOnErrorEvents().get(0).getCause().getMessage().contains("abc"));
+    }
+    
 }

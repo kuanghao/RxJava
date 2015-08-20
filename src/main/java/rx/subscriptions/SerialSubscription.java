@@ -22,12 +22,9 @@ import rx.Subscription;
 /**
  * Represents a subscription whose underlying subscription can be swapped for another subscription which causes
  * the previous underlying subscription to be unsubscribed.
- * 
- * @see <a href="http://msdn.microsoft.com/en-us/library/system.reactive.disposables.serialdisposable(v=vs.103).aspx">Rx.Net equivalent SerialDisposable</a>
  */
 public final class SerialSubscription implements Subscription {
-    static final State EMPTY_STATE = new State(false, Subscriptions.empty());
-    volatile State state = EMPTY_STATE;
+    volatile State state = new State(false, Subscriptions.empty());
     static final AtomicReferenceFieldUpdater<SerialSubscription, State> STATE_UPDATER
             = AtomicReferenceFieldUpdater.newUpdater(SerialSubscription.class, State.class, "state");
 

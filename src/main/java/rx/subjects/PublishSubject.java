@@ -15,7 +15,11 @@
  */
 package rx.subjects;
 
+import java.util.*;
+
 import rx.Observer;
+import rx.annotations.Experimental;
+import rx.exceptions.Exceptions;
 import rx.functions.Action1;
 import rx.internal.operators.NotificationLite;
 import rx.subjects.SubjectSubscriptionManager.SubjectObserver;
@@ -89,9 +93,18 @@ public final class PublishSubject<T> extends Subject<T, T> {
     public void onError(final Throwable e) {
         if (state.active) {
             Object n = nl.error(e);
+            List<Throwable> errors = null;
             for (SubjectObserver<T> bo : state.terminate(n)) {
-                bo.emitNext(n, state.nl);
+                try {
+                    bo.emitNext(n, state.nl);
+                } catch (Throwable e2) {
+                    if (errors == null) {
+                        errors = new ArrayList<Throwable>();
+                    }
+                    errors.add(e2);
+                }
             }
+            Exceptions.throwIfAny(errors);
         }
     }
 
@@ -100,5 +113,69 @@ public final class PublishSubject<T> extends Subject<T, T> {
         for (SubjectObserver<T> bo : state.observers()) {
             bo.onNext(v);
         }
+    }
+
+    @Override
+    public boolean hasObservers() {
+        return state.observers().length > 0;
+    }
+    
+    /**
+     * Check if the Subject has terminated with an exception.
+     * @return true if the subject has received a throwable through {@code onError}.
+     */
+    @Experimental
+    @Override
+    public boolean hasThrowable() {
+        Object o = state.get();
+        return nl.isError(o);
+    }
+    /**
+     * Check if the Subject has terminated normally.
+     * @return true if the subject completed normally via {@code onCompleted}
+     */
+    @Experimental
+    @Override
+    public boolean hasCompleted() {
+        Object o = state.get();
+        return o != null && !nl.isError(o);
+    }
+    /**
+     * Returns the Throwable that terminated the Subject.
+     * @return the Throwable that terminated the Subject or {@code null} if the
+     * subject hasn't terminated yet or it terminated normally.
+     */
+    @Experimental
+    @Override
+    public Throwable getThrowable() {
+        Object o = state.get();
+        if (nl.isError(o)) {
+            return nl.getError(o);
+        }
+        return null;
+    }
+    
+    @Override
+    @Experimental
+    public boolean hasValue() {
+        return false;
+    }
+    @Override
+    @Experimental
+    public T getValue() {
+        return null;
+    }
+    @Override
+    @Experimental
+    public Object[] getValues() {
+        return new Object[0];
+    }
+    @Override
+    @Experimental
+    public T[] getValues(T[] a) {
+        if (a.length > 0) {
+            a[0] = null;
+        }
+        return a;
     }
 }

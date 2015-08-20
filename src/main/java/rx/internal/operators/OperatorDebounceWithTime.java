@@ -62,6 +62,12 @@ public final class OperatorDebounceWithTime<T> implements Operator<T, T> {
         return new Subscriber<T>(child) {
             final DebounceState<T> state = new DebounceState<T>();
             final Subscriber<?> self = this;
+
+            @Override
+            public void onStart() {
+                request(Long.MAX_VALUE);
+            }
+
             @Override
             public void onNext(final T t) {
                 
@@ -110,26 +116,22 @@ public final class OperatorDebounceWithTime<T> implements Operator<T, T> {
         }
         public void emit(int index, Subscriber<T> onNextAndComplete, Subscriber<?> onError) {
             T localValue;
-            boolean localHasValue;
             synchronized (this) {
                 if (emitting || !hasValue || index != this.index) {
                     return;
                 }
                 localValue = value;
-                localHasValue = hasValue;
                 
                 value = null;
                 hasValue = false;
                 emitting = true;
             }
 
-            if  (localHasValue) {
-                try {
-                    onNextAndComplete.onNext(localValue);
-                } catch (Throwable e) {
-                    onError.onError(e);
-                    return;
-                }
+            try {
+                onNextAndComplete.onNext(localValue);
+            } catch (Throwable e) {
+                onError.onError(e);
+                return;
             }
 
             // Check if a termination was requested in the meantime.

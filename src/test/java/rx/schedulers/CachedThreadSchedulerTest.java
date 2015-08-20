@@ -16,13 +16,13 @@
 
 package rx.schedulers;
 
-import org.junit.Test;
-import rx.Observable;
-import rx.Scheduler;
-import rx.functions.Action1;
-import rx.functions.Func1;
-
 import static org.junit.Assert.assertTrue;
+
+import org.junit.Test;
+
+import rx.*;
+import rx.Scheduler.Worker;
+import rx.functions.*;
 
 public class CachedThreadSchedulerTest extends AbstractSchedulerConcurrencyTests {
 
@@ -55,6 +55,32 @@ public class CachedThreadSchedulerTest extends AbstractSchedulerConcurrencyTests
                 System.out.println("t: " + t);
             }
         });
+    }
+
+    @Test
+    public final void testUnhandledErrorIsDeliveredToThreadHandler() throws InterruptedException {
+        SchedulerTests.testUnhandledErrorIsDeliveredToThreadHandler(getScheduler());
+    }
+
+    @Test
+    public final void testHandledErrorIsNotDeliveredToThreadHandler() throws InterruptedException {
+        SchedulerTests.testHandledErrorIsNotDeliveredToThreadHandler(getScheduler());
+    }
+    
+    @Test(timeout = 30000)
+    public void testCancelledTaskRetention() throws InterruptedException {
+        Worker w = Schedulers.io().createWorker();
+        try {
+            ExecutorSchedulerTest.testCancelledRetention(w, false);
+        } finally {
+            w.unsubscribe();
+        }
+        w = Schedulers.io().createWorker();
+        try {
+            ExecutorSchedulerTest.testCancelledRetention(w, true);
+        } finally {
+            w.unsubscribe();
+        }
     }
 
 }

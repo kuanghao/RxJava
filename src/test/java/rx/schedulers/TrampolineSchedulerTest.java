@@ -15,20 +15,21 @@
  */
 package rx.schedulers;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.*;
 
-import java.util.ArrayList;
-import java.util.Arrays;
+import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.Test;
 
-import rx.Observable;
-import rx.Scheduler;
+import rx.*;
+import rx.Observer;
 import rx.Scheduler.Worker;
-import rx.functions.Action0;
-import rx.functions.Action1;
-import rx.functions.Func1;
+import rx.Observable;
+import rx.functions.*;
+import rx.observers.Observers;
+import rx.observers.TestSubscriber;
+import rx.subscriptions.CompositeSubscription;
 
 public class TrampolineSchedulerTest extends AbstractSchedulerTests {
 
@@ -65,33 +66,81 @@ public class TrampolineSchedulerTest extends AbstractSchedulerTests {
     @Test
     public void testNestedTrampolineWithUnsubscribe() {
         final ArrayList<String> workDone = new ArrayList<String>();
+        final CompositeSubscription workers = new CompositeSubscription();
         Worker worker = Schedulers.trampoline().createWorker();
-        worker.schedule(new Action0() {
-
-            @Override
-            public void call() {
-                doWorkOnNewTrampoline("A", workDone);
-            }
-
-        });
-
-        final Worker worker2 = Schedulers.trampoline().createWorker();
-        worker2.schedule(new Action0() {
-
-            @Override
-            public void call() {
-                doWorkOnNewTrampoline("B", workDone);
-                // we unsubscribe worker2 ... it should not affect work scheduled on a separate Trampline.Worker
-                worker2.unsubscribe();
-            }
-
-        });
-
-        assertEquals(6, workDone.size());
-        assertEquals(Arrays.asList("A.1", "A.B.1", "A.B.2", "B.1", "B.B.1", "B.B.2"), workDone);
+        try {
+            workers.add(worker);
+            worker.schedule(new Action0() {
+    
+                @Override
+                public void call() {
+                    workers.add(doWorkOnNewTrampoline("A", workDone));
+                }
+    
+            });
+    
+            final Worker worker2 = Schedulers.trampoline().createWorker();
+            workers.add(worker2);
+            worker2.schedule(new Action0() {
+    
+                @Override
+                public void call() {
+                    workers.add(doWorkOnNewTrampoline("B", workDone));
+                    // we unsubscribe worker2 ... it should not affect work scheduled on a separate Trampline.Worker
+                    worker2.unsubscribe();
+                }
+    
+            });
+        
+            assertEquals(6, workDone.size());
+            assertEquals(Arrays.asList("A.1", "A.B.1", "A.B.2", "B.1", "B.B.1", "B.B.2"), workDone);
+        } finally {
+            workers.unsubscribe();
+        }
     }
 
-    private static void doWorkOnNewTrampoline(final String key, final ArrayList<String> workDone) {
+    /**
+     * This is a regression test for #1702. Concurrent work scheduling that is improperly synchronized can cause an
+     * action to be added or removed onto the priority queue during a poll, which can result in NPEs during queue
+     * sifting. While it is difficult to isolate the issue directly, we can easily trigger the behavior by spamming the
+     * trampoline with enqueue requests from multiple threads concurrently.
+     */
+    @Test
+    public void testTrampolineWorkerHandlesConcurrentScheduling() {
+        final Worker trampolineWorker = Schedulers.trampoline().createWorker();
+        final Observer<Subscription> observer = Observers.empty();
+        final TestSubscriber<Subscription> ts = new TestSubscriber<Subscription>(observer);
+
+        // Spam the trampoline with actions.
+        Observable.range(0, 50)
+                .flatMap(new Func1<Integer, Observable<Subscription>>() {
+
+                    @Override
+                    public Observable<Subscription> call(Integer count) {
+                        return Observable.interval(1, TimeUnit.MICROSECONDS).map(
+                                new Func1<Long, Subscription>() {
+
+                                     @Override
+                                     public Subscription call(Long count) {
+                                         return trampolineWorker.schedule(new Action0() {
+
+                                             @Override
+                                             public void call() {}
+
+                                         });
+                                     }
+
+                                }).limit(100);
+                    }
+
+                })
+                .subscribeOn(Schedulers.computation())
+                .subscribe(ts);
+        ts.awaitTerminalEvent();
+        ts.assertNoErrors();
+    }
+
+    private static Worker doWorkOnNewTrampoline(final String key, final ArrayList<String> workDone) {
         Worker worker = Schedulers.trampoline().createWorker();
         worker.schedule(new Action0() {
 
@@ -106,6 +155,7 @@ public class TrampolineSchedulerTest extends AbstractSchedulerTests {
             }
 
         });
+        return worker;
     }
 
     private static Action0 createPrintAction(final String message, final ArrayList<String> workDone) {

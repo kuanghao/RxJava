@@ -15,6 +15,7 @@
  */
 package rx.internal.operators;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
@@ -25,16 +26,25 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.InOrder;
 
-import rx.*;
+import rx.Observable;
+import rx.Observer;
+import rx.Producer;
+import rx.Scheduler;
+import rx.Subscriber;
 import rx.exceptions.TestException;
 import rx.functions.Action0;
+import rx.functions.Action1;
+import rx.functions.Func1;
 import rx.observers.TestSubscriber;
 import rx.schedulers.TestScheduler;
 
@@ -479,7 +489,7 @@ public class OperatorSwitchTest {
                 publishCompleted(observer, 30);
             }
         });
-        final TestSubscriber testSubscriber = new TestSubscriber();
+        final TestSubscriber<String> testSubscriber = new TestSubscriber<String>();
         Observable.switchOnNext(o).subscribe(new Subscriber<String>() {
 
             private int requested = 0;
@@ -530,4 +540,135 @@ public class OperatorSwitchTest {
         ).take(1).subscribe();
         assertTrue("Switch doesn't propagate 'unsubscribe'", isUnsubscribed.get());
     }
+    /** The upstream producer hijacked the switch producer stopping the requests aimed at the inner observables. */
+    @Test
+    public void testIssue2654() {
+        Observable<String> oneItem = Observable.just("Hello").mergeWith(Observable.<String>never());
+        
+        Observable<String> src = oneItem.switchMap(new Func1<String, Observable<String>>() {
+            @Override
+            public Observable<String> call(final String s) {
+                return Observable.just(s)
+                        .mergeWith(Observable.interval(10, TimeUnit.MILLISECONDS)
+                        .map(new Func1<Long, String>() {
+                            @Override
+                            public String call(Long i) {
+                                return s + " " + i;
+                            }
+                        })).take(250);
+            }
+        })
+        .share()
+        ;
+        
+        TestSubscriber<String> ts = new TestSubscriber<String>() {
+            @Override
+            public void onNext(String t) {
+                super.onNext(t);
+                if (getOnNextEvents().size() == 250) {
+                    onCompleted();
+                    unsubscribe();
+                }
+            }
+        };
+        src.subscribe(ts);
+        
+        ts.awaitTerminalEvent(10, TimeUnit.SECONDS);
+        
+        System.out.println("> testIssue2654: " + ts.getOnNextEvents().size());
+        
+        ts.assertTerminalEvent();
+        ts.assertNoErrors();
+        
+        Assert.assertEquals(250, ts.getOnNextEvents().size());
+    }
+    
+    @Test(timeout = 10000)
+    public void testInitialRequestsAreAdditive() {
+        TestSubscriber<Long> ts = new TestSubscriber<Long>(0);
+        Observable.switchOnNext(
+                Observable.interval(100, TimeUnit.MILLISECONDS)
+                          .map(
+                                new Func1<Long, Observable<Long>>() {
+                                    @Override
+                                    public Observable<Long> call(Long t) {
+                                        return Observable.just(1L, 2L, 3L);
+                                    }
+                                }
+                          ).take(3))
+                          .subscribe(ts);
+        ts.requestMore(Long.MAX_VALUE - 100);
+        ts.requestMore(1);
+        ts.awaitTerminalEvent();
+    }
+    
+    @Test(timeout = 10000)
+    public void testInitialRequestsDontOverflow() {
+        TestSubscriber<Long> ts = new TestSubscriber<Long>(0);
+        Observable.switchOnNext(
+                Observable.interval(100, TimeUnit.MILLISECONDS)
+                        .map(new Func1<Long, Observable<Long>>() {
+                            @Override
+                            public Observable<Long> call(Long t) {
+                                return Observable.from(Arrays.asList(1L, 2L, 3L));
+                            }
+                        }).take(3)).subscribe(ts);
+        ts.requestMore(Long.MAX_VALUE - 1);
+        ts.requestMore(2);
+        ts.awaitTerminalEvent();
+        assertTrue(ts.getOnNextEvents().size() > 0);
+    }
+    
+    
+    @Test(timeout = 10000)
+    public void testSecondaryRequestsDontOverflow() throws InterruptedException {
+        TestSubscriber<Long> ts = new TestSubscriber<Long>(0);
+        Observable.switchOnNext(
+                Observable.interval(100, TimeUnit.MILLISECONDS)
+                        .map(new Func1<Long, Observable<Long>>() {
+                            @Override
+                            public Observable<Long> call(Long t) {
+                                return Observable.from(Arrays.asList(1L, 2L, 3L));
+                            }
+                        }).take(3)).subscribe(ts);
+        ts.requestMore(1);
+        //we will miss two of the first observable
+        Thread.sleep(250);
+        ts.requestMore(Long.MAX_VALUE - 1);
+        ts.requestMore(Long.MAX_VALUE - 1);
+        ts.awaitTerminalEvent();
+        ts.assertValueCount(7);
+    }
+    
+    @Test(timeout = 10000)
+    public void testSecondaryRequestsAdditivelyAreMoreThanLongMaxValueInducesMaxValueRequestFromUpstream()
+            throws InterruptedException {
+        final List<Long> requests = new CopyOnWriteArrayList<Long>();
+        final Action1<Long> addRequest = new Action1<Long>() {
+
+            @Override
+            public void call(Long n) {
+                requests.add(n);
+            }
+        };
+        TestSubscriber<Long> ts = new TestSubscriber<Long>(1);
+        Observable.switchOnNext(
+                Observable.interval(100, TimeUnit.MILLISECONDS)
+                        .map(new Func1<Long, Observable<Long>>() {
+                            @Override
+                            public Observable<Long> call(Long t) {
+                                return Observable.from(Arrays.asList(1L, 2L, 3L)).doOnRequest(
+                                        addRequest);
+                            }
+                        }).take(3)).subscribe(ts);
+        // we will miss two of the first observables
+        Thread.sleep(250);
+        ts.requestMore(Long.MAX_VALUE - 1);
+        ts.requestMore(Long.MAX_VALUE - 1);
+        ts.awaitTerminalEvent();
+        assertTrue(ts.getOnNextEvents().size() > 0);
+        assertEquals(5, (int) requests.size());
+        assertEquals(Long.MAX_VALUE, (long) requests.get(requests.size()-1));
+    }
+
 }

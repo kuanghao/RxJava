@@ -1,12 +1,12 @@
 /**
  * Copyright 2014 Netflix, Inc.
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -15,7 +15,7 @@
  */
 package rx.schedulers;
 
-import java.util.PriorityQueue;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
@@ -45,18 +45,12 @@ public final class TrampolineScheduler extends Scheduler {
     /* package accessible for unit tests */TrampolineScheduler() {
     }
 
-    private static final ThreadLocal<PriorityQueue<TimedAction>> QUEUE = new ThreadLocal<PriorityQueue<TimedAction>>() {
-        @Override
-        protected PriorityQueue<TimedAction> initialValue() {
-            return new PriorityQueue<TimedAction>();
-        }
-    };
+    private static class InnerCurrentThreadScheduler extends Scheduler.Worker implements Subscription {
 
-    volatile int counter;
-    static final AtomicIntegerFieldUpdater<TrampolineScheduler> COUNTER_UPDATER = AtomicIntegerFieldUpdater.newUpdater(TrampolineScheduler.class, "counter");
-
-    private class InnerCurrentThreadScheduler extends Scheduler.Worker implements Subscription {
-
+        private static final AtomicIntegerFieldUpdater<InnerCurrentThreadScheduler> COUNTER_UPDATER = AtomicIntegerFieldUpdater.newUpdater(InnerCurrentThreadScheduler.class, "counter");
+        @SuppressWarnings("unused")
+        volatile int counter;
+        private final PriorityBlockingQueue<TimedAction> queue = new PriorityBlockingQueue<TimedAction>();
         private final BooleanSubscription innerSubscription = new BooleanSubscription();
         private final AtomicInteger wip = new AtomicInteger();
 
@@ -74,27 +68,26 @@ public final class TrampolineScheduler extends Scheduler {
 
         private Subscription enqueue(Action0 action, long execTime) {
             if (innerSubscription.isUnsubscribed()) {
-                return Subscriptions.empty();
+                return Subscriptions.unsubscribed();
             }
-            PriorityQueue<TimedAction> queue = QUEUE.get();
-            final TimedAction timedAction = new TimedAction(action, execTime, COUNTER_UPDATER.incrementAndGet(TrampolineScheduler.this));
+            final TimedAction timedAction = new TimedAction(action, execTime, COUNTER_UPDATER.incrementAndGet(this));
             queue.add(timedAction);
 
             if (wip.getAndIncrement() == 0) {
                 do {
-                    queue.poll().action.call();
+                    final TimedAction polled = queue.poll();
+                    if (polled != null) {
+                        polled.action.call();
+                    }
                 } while (wip.decrementAndGet() > 0);
-                return Subscriptions.empty();
+                return Subscriptions.unsubscribed();
             } else {
                 // queue wasn't empty, a parent is already processing so we just add to the end of the queue
                 return Subscriptions.create(new Action0() {
 
                     @Override
                     public void call() {
-                        PriorityQueue<TimedAction> _q = QUEUE.get();
-                        if (_q != null) {
-                            _q.remove(timedAction);
-                        }
+                        queue.remove(timedAction);
                     }
 
                 });
@@ -113,7 +106,7 @@ public final class TrampolineScheduler extends Scheduler {
 
     }
 
-    private static class TimedAction implements Comparable<TimedAction> {
+    private static final class TimedAction implements Comparable<TimedAction> {
         final Action0 action;
         final Long execTime;
         final int count; // In case if time between enqueueing took less than 1ms
@@ -133,7 +126,7 @@ public final class TrampolineScheduler extends Scheduler {
             return result;
         }
     }
-    
+
     // because I can't use Integer.compare from Java 7
     private static int compare(int x, int y) {
         return (x < y) ? -1 : ((x == y) ? 0 : 1);

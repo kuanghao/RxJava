@@ -16,7 +16,6 @@
 package rx;
 
 import rx.internal.util.SubscriptionList;
-import rx.subscriptions.CompositeSubscription;
 
 /**
  * Provides a mechanism for receiving push-based notifications from Observables, and permits manual
@@ -27,27 +26,59 @@ import rx.subscriptions.CompositeSubscription;
  * {@link Observable} will call a Subscriber's {@link #onCompleted} method exactly once or the Subscriber's
  * {@link #onError} method exactly once.
  * 
- * @see <a href="https://github.com/ReactiveX/RxJava/wiki/Observable">RxJava Wiki: Observable</a>
+ * @see <a href="http://reactivex.io/documentation/observable.html">ReactiveX documentation: Observable</a>
  * @param <T>
  *          the type of items the Subscriber expects to observe
  */
 public abstract class Subscriber<T> implements Observer<T>, Subscription {
+    
+    // represents requested not set yet
+    private static final Long NOT_SET = Long.MIN_VALUE;
 
-    private final SubscriptionList cs;
-    private final Subscriber<?> op;
+    private final SubscriptionList subscriptions;
+    private final Subscriber<?> subscriber;
     /* protected by `this` */
-    private Producer p;
+    private Producer producer;
     /* protected by `this` */
-    private long requested = Long.MIN_VALUE; // default to not set
+    private long requested = NOT_SET; // default to not set
 
     protected Subscriber() {
-        this.op = null;
-        this.cs = new SubscriptionList();
+        this(null, false);
     }
 
-    protected Subscriber(Subscriber<?> op) {
-        this.op = op;
-        this.cs = op.cs;
+    /**
+     * Construct a Subscriber by using another Subscriber for backpressure and
+     * for holding the subscription list (when <code>this.add(sub)</code> is
+     * called this will in fact call <code>subscriber.add(sub)</code>).
+     * 
+     * @param subscriber
+     *            the other Subscriber
+     */
+    protected Subscriber(Subscriber<?> subscriber) {
+        this(subscriber, true);
+    }
+
+    /**
+     * Construct a Subscriber by using another Subscriber for backpressure and
+     * optionally for holding the subscription list (if
+     * <code>shareSubscriptions</code> is <code>true</code> then when
+     * <code>this.add(sub)</code> is called this will in fact call
+     * <code>subscriber.add(sub)</code>).
+     * <p>
+     * To retain the chaining of subscribers when setting
+     * <code>shareSubscriptions</code> to <code>false</code>, add the created
+     * instance to {@code subscriber} via {@link #add}.
+     * 
+     * @param subscriber
+     *            the other Subscriber
+     * @param shareSubscriptions
+     *            {@code true} to share the subscription list in {@code subscriber} with
+     *            this instance
+     * @since 1.0.6
+     */
+    protected Subscriber(Subscriber<?> subscriber, boolean shareSubscriptions) {
+        this.subscriber = subscriber;
+        this.subscriptions = shareSubscriptions && subscriber != null ? subscriber.subscriptions : new SubscriptionList();
     }
 
     /**
@@ -59,12 +90,12 @@ public abstract class Subscriber<T> implements Observer<T>, Subscription {
      *            the {@code Subscription} to add
      */
     public final void add(Subscription s) {
-        cs.add(s);
+        subscriptions.add(s);
     }
 
     @Override
     public final void unsubscribe() {
-        cs.unsubscribe();
+        subscriptions.unsubscribe();
     }
 
     /**
@@ -72,16 +103,15 @@ public abstract class Subscriber<T> implements Observer<T>, Subscription {
      * 
      * @return {@code true} if this Subscriber has unsubscribed from its subscriptions, {@code false} otherwise
      */
+    @Override
     public final boolean isUnsubscribed() {
-        return cs.isUnsubscribed();
+        return subscriptions.isUnsubscribed();
     }
 
     /**
      * This method is invoked when the Subscriber and Observable have been connected but the Observable has
      * not yet begun to emit items or send notifications to the Subscriber. Override this method to add any
      * useful initialization to your subscription, for instance to initiate backpressure.
-     *
-     * @since 0.20
      */
     public void onStart() {
         // do nothing by default
@@ -91,56 +121,94 @@ public abstract class Subscriber<T> implements Observer<T>, Subscription {
      * Request a certain maximum number of emitted items from the Observable this Subscriber is subscribed to.
      * This is a way of requesting backpressure. To disable backpressure, pass {@code Long.MAX_VALUE} to this
      * method.
-     *
+     * <p>
+     * Requests are additive but if a sequence of requests totals more than {@code Long.MAX_VALUE} then 
+     * {@code Long.MAX_VALUE} requests will be actioned and the extras <i>may</i> be ignored. Arriving at 
+     * {@code Long.MAX_VALUE} by addition of requests cannot be assumed to disable backpressure. For example, 
+     * the code below may result in {@code Long.MAX_VALUE} requests being actioned only.
+     * 
+     * <pre>
+     * request(100);
+     * request(Long.MAX_VALUE-1);
+     * </pre>
+     * 
      * @param n the maximum number of items you want the Observable to emit to the Subscriber at this time, or
      *           {@code Long.MAX_VALUE} if you want the Observable to emit items at its own pace
-     * @since 0.20
+     * @throws IllegalArgumentException
+     *             if {@code n} is negative
      */
     protected final void request(long n) {
-        Producer shouldRequest = null;
+        if (n < 0) {
+            throw new IllegalArgumentException("number requested cannot be negative: " + n);
+        } 
+        
+        // if producer is set then we will request from it
+        // otherwise we increase the requested count by n
+        Producer producerToRequestFrom = null;
         synchronized (this) {
-            if (p != null) {
-                shouldRequest = p;
+            if (producer != null) {
+                producerToRequestFrom = producer;
             } else {
-                requested = n;
+                addToRequested(n);
+                return;
             }
         }
-        // after releasing lock
-        if (shouldRequest != null) {
-            shouldRequest.request(n);
-        }
+        // after releasing lock (we should not make requests holding a lock)
+        producerToRequestFrom.request(n);
     }
 
+    private void addToRequested(long n) {
+        if (requested == NOT_SET) {
+            requested = n;
+        } else { 
+            final long total = requested + n;
+            // check if overflow occurred
+            if (total < 0) {
+                requested = Long.MAX_VALUE;
+            } else {
+                requested = total;
+            }
+        }
+    }
+    
     /**
-     * @warn javadoc description missing
-     * @warn param producer not described
-     * @param producer
-     * @since 0.20
+     * If other subscriber is set (by calling constructor
+     * {@link #Subscriber(Subscriber)} or
+     * {@link #Subscriber(Subscriber, boolean)}) then this method calls
+     * <code>setProducer</code> on the other subscriber. If the other subscriber
+     * is not set and no requests have been made to this subscriber then
+     * <code>p.request(Long.MAX_VALUE)</code> is called. If the other subscriber
+     * is not set and some requests have been made to this subscriber then
+     * <code>p.request(n)</code> is called where n is the accumulated requests
+     * to this subscriber.
+     * 
+     * @param p
+     *            producer to be used by this subscriber or the other subscriber
+     *            (or recursively its other subscriber) to make requests from
      */
-    public void setProducer(Producer producer) {
+    public void setProducer(Producer p) {
         long toRequest;
-        boolean setProducer = false;
+        boolean passToSubscriber = false;
         synchronized (this) {
             toRequest = requested;
-            p = producer;
-            if (op != null) {
+            producer = p;
+            if (subscriber != null) {
                 // middle operator ... we pass thru unless a request has been made
-                if (toRequest == Long.MIN_VALUE) {
+                if (toRequest == NOT_SET) {
                     // we pass-thru to the next producer as nothing has been requested
-                    setProducer = true;
+                    passToSubscriber = true;
                 }
-
             }
         }
         // do after releasing lock
-        if (setProducer) {
-            op.setProducer(p);
+        if (passToSubscriber) {
+            subscriber.setProducer(producer);
         } else {
             // we execute the request with whatever has been requested (or Long.MAX_VALUE)
-            if (toRequest == Long.MIN_VALUE) {
-                p.request(Long.MAX_VALUE);
+            if (toRequest == NOT_SET) {
+                producer.request(Long.MAX_VALUE);
             } else {
-                p.request(toRequest);
+                producer.request(toRequest);
             }
         }
     }

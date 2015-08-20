@@ -1,18 +1,18 @@
- /**
-  * Copyright 2014 Netflix, Inc.
-  *
-  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
-  * use this file except in compliance with the License. You may obtain a copy of
-  * the License at
-  *
-  * http://www.apache.org/licenses/LICENSE-2.0
-  *
-  * Unless required by applicable law or agreed to in writing, software
-  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-  * License for the specific language governing permissions and limitations under
-  * the License.
-  */
+/**
+ * Copyright 2014 Netflix, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
 package rx.internal.operators;
 
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -24,6 +24,7 @@ import rx.Observable.Operator;
 import rx.Producer;
 import rx.Subscriber;
 import rx.functions.Action0;
+import rx.internal.producers.ProducerArbiter;
 import rx.observers.SerializedSubscriber;
 import rx.subscriptions.SerialSubscription;
 import rx.subscriptions.Subscriptions;
@@ -37,6 +38,19 @@ import rx.subscriptions.Subscriptions;
  *            the source and result value type
  */
 public final class OperatorConcat<T> implements Operator<T, Observable<? extends T>> {
+    /** Lazy initialization via inner-class holder. */
+    private static final class Holder {
+        /** A singleton instance. */
+        static final OperatorConcat<Object> INSTANCE = new OperatorConcat<Object>();
+    }
+    /**
+     * @return a singleton instance of this stateless operator.
+     */
+    @SuppressWarnings("unchecked")
+    public static <T> OperatorConcat<T> instance() {
+        return (OperatorConcat<T>)Holder.INSTANCE;
+    }
+    private OperatorConcat() { }
     @Override
     public Subscriber<? super Observable<? extends T>> call(final Subscriber<? super T> child) {
         final SerializedSubscriber<T> s = new SerializedSubscriber<T>(child);
@@ -72,17 +86,19 @@ public final class OperatorConcat<T> implements Operator<T, Observable<? extends
 
         volatile int wip;
         @SuppressWarnings("rawtypes")
-        static final AtomicIntegerFieldUpdater<ConcatSubscriber> WIP_UPDATER = AtomicIntegerFieldUpdater.newUpdater(ConcatSubscriber.class, "wip");
+        static final AtomicIntegerFieldUpdater<ConcatSubscriber> WIP = AtomicIntegerFieldUpdater.newUpdater(ConcatSubscriber.class, "wip");
 
-        // accessed by REQUESTED_UPDATER
+        // accessed by REQUESTED
         private volatile long requested;
         @SuppressWarnings("rawtypes")
-        private static final AtomicLongFieldUpdater<ConcatSubscriber> REQUESTED_UPDATER = AtomicLongFieldUpdater.newUpdater(ConcatSubscriber.class, "requested");
+        private static final AtomicLongFieldUpdater<ConcatSubscriber> REQUESTED = AtomicLongFieldUpdater.newUpdater(ConcatSubscriber.class, "requested");
+        private final ProducerArbiter arbiter;
 
         public ConcatSubscriber(Subscriber<T> s, SerialSubscription current) {
             super(s);
             this.child = s;
             this.current = current;
+            this.arbiter = new ProducerArbiter();
             this.queue = new ConcurrentLinkedQueue<Object>();
             add(Subscriptions.create(new Action0() {
                 @Override
@@ -100,31 +116,27 @@ public final class OperatorConcat<T> implements Operator<T, Observable<? extends
         }
 
         private void requestFromChild(long n) {
+            if (n <=0) return;
             // we track 'requested' so we know whether we should subscribe the next or not
-            if (REQUESTED_UPDATER.getAndAdd(this, n) == 0) {
+            long previous = BackpressureUtils.getAndAddRequest(REQUESTED, this, n);
+            arbiter.request(n);
+            if (previous == 0) {
                 if (currentSubscriber == null && wip > 0) {
                     // this means we may be moving from one subscriber to another after having stopped processing
                     // so need to kick off the subscribe via this request notification
                     subscribeNext();
-                    // return here as we don't want to do the requestMore logic below (which would double request)
-                    return;
                 }
             } 
-                
-            if (currentSubscriber != null) {
-                // otherwise we are just passing it through to the currentSubscriber
-                currentSubscriber.requestMore(n);
-            }
         }
 
         private void decrementRequested() {
-            REQUESTED_UPDATER.decrementAndGet(this);
+            REQUESTED.decrementAndGet(this);
         }
 
         @Override
         public void onNext(Observable<? extends T> t) {
             queue.add(nl.next(t));
-            if (WIP_UPDATER.getAndIncrement(this) == 0) {
+            if (WIP.getAndIncrement(this) == 0) {
                 subscribeNext();
             }
         }
@@ -138,17 +150,18 @@ public final class OperatorConcat<T> implements Operator<T, Observable<? extends
         @Override
         public void onCompleted() {
             queue.add(nl.completed());
-            if (WIP_UPDATER.getAndIncrement(this) == 0) {
+            if (WIP.getAndIncrement(this) == 0) {
                 subscribeNext();
             }
         }
+        
 
         void completeInner() {
-            request(1);
             currentSubscriber = null;
-            if (WIP_UPDATER.decrementAndGet(this) > 0) {
+            if (WIP.decrementAndGet(this) > 0) {
                 subscribeNext();
             }
+            request(1);
         }
 
         void subscribeNext() {
@@ -158,7 +171,7 @@ public final class OperatorConcat<T> implements Operator<T, Observable<? extends
                     child.onCompleted();
                 } else if (o != null) {
                     Observable<? extends T> obs = nl.getValue(o);
-                    currentSubscriber = new ConcatInnerSubscriber<T>(this, child, requested);
+                    currentSubscriber = new ConcatInnerSubscriber<T>(this, child, arbiter);
                     current.set(currentSubscriber);
                     obs.unsafeSubscribe(currentSubscriber);
                 }
@@ -176,33 +189,44 @@ public final class OperatorConcat<T> implements Operator<T, Observable<? extends
 
         private final Subscriber<T> child;
         private final ConcatSubscriber<T> parent;
+        @SuppressWarnings("unused")
+        private volatile int once = 0;
+        @SuppressWarnings("rawtypes")
+        private final static AtomicIntegerFieldUpdater<ConcatInnerSubscriber> ONCE = AtomicIntegerFieldUpdater.newUpdater(ConcatInnerSubscriber.class, "once");
+        private final ProducerArbiter arbiter;
 
-        public ConcatInnerSubscriber(ConcatSubscriber<T> parent, Subscriber<T> child, long initialRequest) {
+        public ConcatInnerSubscriber(ConcatSubscriber<T> parent, Subscriber<T> child, ProducerArbiter arbiter) {
             this.parent = parent;
             this.child = child;
-            request(initialRequest);
+            this.arbiter = arbiter;
         }
-
-        void requestMore(long n) {
-            request(n);
-        }
-
+        
         @Override
         public void onNext(T t) {
-            parent.decrementRequested();
             child.onNext(t);
+            parent.decrementRequested();
+            arbiter.produced(1);
         }
 
         @Override
         public void onError(Throwable e) {
-            // terminal error through parent so everything gets cleaned up, including this inner
-            parent.onError(e);
+            if (ONCE.compareAndSet(this, 0, 1)) {
+                // terminal error through parent so everything gets cleaned up, including this inner
+                parent.onError(e);
+            }
         }
 
         @Override
         public void onCompleted() {
-            // terminal completion to parent so it continues to the next
-            parent.completeInner();
+            if (ONCE.compareAndSet(this, 0, 1)) {
+                // terminal completion to parent so it continues to the next
+                parent.completeInner();
+            }
+        }
+        
+        @Override
+        public void setProducer(Producer producer) {
+            arbiter.setProducer(producer);
         }
 
     };

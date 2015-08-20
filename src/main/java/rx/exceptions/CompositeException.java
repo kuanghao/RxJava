@@ -26,8 +26,8 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * An Exception that is a composite of one or more other Exceptions. A {@code CompositeException} does not
- * modify the structure of any exception it wraps, but at print-time it iterates through the list of
+ * Represents an exception that is a composite of one or more other exceptions. A {@code CompositeException}
+ * does not modify the structure of any exception it wraps, but at print-time it iterates through the list of
  * Throwables contained in the composit in order to print them all.
  *
  * Its invariant is to contain an immutable, ordered (by insertion order), unique list of non-composite
@@ -49,12 +49,19 @@ public final class CompositeException extends RuntimeException {
     public CompositeException(String messagePrefix, Collection<? extends Throwable> errors) {
         Set<Throwable> deDupedExceptions = new LinkedHashSet<Throwable>();
         List<Throwable> _exceptions = new ArrayList<Throwable>();
-        for (Throwable ex : errors) {
-            if (ex instanceof CompositeException) {
-                deDupedExceptions.addAll(((CompositeException) ex).getExceptions());
-            } else {
-                deDupedExceptions.add(ex);
+        if (errors != null) {
+            for (Throwable ex : errors) {
+                if (ex instanceof CompositeException) {
+                    deDupedExceptions.addAll(((CompositeException) ex).getExceptions());
+                } else 
+                if (ex != null) {
+                    deDupedExceptions.add(ex);
+                } else {
+                    deDupedExceptions.add(new NullPointerException());
+                }
             }
+        } else {
+            deDupedExceptions.add(new NullPointerException());
         }
 
         _exceptions.addAll(deDupedExceptions);
@@ -201,10 +208,12 @@ public final class CompositeException extends RuntimeException {
             this.printStream = printStream;
         }
 
+        @Override
         Object lock() {
             return printStream;
         }
 
+        @Override
         void println(Object o) {
             printStream.println(o);
         }
@@ -217,10 +226,12 @@ public final class CompositeException extends RuntimeException {
             this.printWriter = printWriter;
         }
 
+        @Override
         Object lock() {
             return printWriter;
         }
 
+        @Override
         void println(Object o) {
             printWriter.println(o);
         }

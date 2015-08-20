@@ -16,6 +16,10 @@
 package rx.subjects;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.inOrder;
@@ -33,7 +37,11 @@ import org.mockito.Mockito;
 
 import rx.Observer;
 import rx.Subscription;
+import rx.exceptions.CompositeException;
+import rx.exceptions.OnErrorNotImplementedException;
+import rx.exceptions.TestException;
 import rx.functions.Action1;
+import rx.observers.TestSubscriber;
 
 public class AsyncSubjectTest {
 
@@ -281,5 +289,111 @@ public class AsyncSubjectTest {
             }
         }
     }
+    
+    @Test
+    public void testOnErrorThrowsDoesntPreventDelivery() {
+        AsyncSubject<String> ps = AsyncSubject.create();
 
+        ps.subscribe();
+        TestSubscriber<String> ts = new TestSubscriber<String>();
+        ps.subscribe(ts);
+
+        try {
+            ps.onError(new RuntimeException("an exception"));
+            fail("expect OnErrorNotImplementedException");
+        } catch (OnErrorNotImplementedException e) {
+            // ignore
+        }
+        // even though the onError above throws we should still receive it on the other subscriber 
+        assertEquals(1, ts.getOnErrorEvents().size());
+    }
+    
+    /**
+     * This one has multiple failures so should get a CompositeException
+     */
+    @Test
+    public void testOnErrorThrowsDoesntPreventDelivery2() {
+        AsyncSubject<String> ps = AsyncSubject.create();
+
+        ps.subscribe();
+        ps.subscribe();
+        TestSubscriber<String> ts = new TestSubscriber<String>();
+        ps.subscribe(ts);
+        ps.subscribe();
+        ps.subscribe();
+        ps.subscribe();
+
+        try {
+            ps.onError(new RuntimeException("an exception"));
+            fail("expect OnErrorNotImplementedException");
+        } catch (CompositeException e) {
+            // we should have 5 of them
+            assertEquals(5, e.getExceptions().size());
+        }
+        // even though the onError above throws we should still receive it on the other subscriber 
+        assertEquals(1, ts.getOnErrorEvents().size());
+    }
+
+    @Test
+    public void testCurrentStateMethodsNormal() {
+        AsyncSubject<Object> as = AsyncSubject.create();
+        
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onNext(1);
+        
+        assertTrue(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertEquals(1, as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onCompleted();
+        assertTrue(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertTrue(as.hasCompleted());
+        assertEquals(1, as.getValue());
+        assertNull(as.getThrowable());
+    }
+    
+    @Test
+    public void testCurrentStateMethodsEmpty() {
+        AsyncSubject<Object> as = AsyncSubject.create();
+        
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onCompleted();
+        
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertTrue(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+    }
+    @Test
+    public void testCurrentStateMethodsError() {
+        AsyncSubject<Object> as = AsyncSubject.create();
+        
+        assertFalse(as.hasValue());
+        assertFalse(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertNull(as.getValue());
+        assertNull(as.getThrowable());
+        
+        as.onError(new TestException());
+        
+        assertFalse(as.hasValue());
+        assertTrue(as.hasThrowable());
+        assertFalse(as.hasCompleted());
+        assertNull(as.getValue());
+        assertTrue(as.getThrowable() instanceof TestException);
+    }
 }

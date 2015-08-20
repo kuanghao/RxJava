@@ -15,37 +15,22 @@
  */
 package rx.internal.operators;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-import static org.mockito.Matchers.any;
-import static org.mockito.Matchers.anyString;
-import static org.mockito.Mockito.inOrder;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.junit.Assert.*;
+import static org.mockito.Matchers.*;
+import static org.mockito.Mockito.*;
 
 import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
 
 import org.junit.Test;
 import org.mockito.InOrder;
 
-import rx.Observable;
+import rx.*;
 import rx.Observable.OnSubscribe;
-import rx.Observer;
-import rx.Producer;
-import rx.Subscriber;
-import rx.Subscription;
-import rx.functions.Action1;
-import rx.functions.Func1;
-import rx.internal.operators.OperatorTake;
-import rx.observers.Subscribers;
-import rx.observers.TestSubscriber;
+import rx.exceptions.TestException;
+import rx.functions.*;
+import rx.observers.*;
 import rx.schedulers.Schedulers;
 
 public class OperatorTakeTest {
@@ -83,6 +68,7 @@ public class OperatorTakeTest {
     @Test(expected = IllegalArgumentException.class)
     public void testTakeWithError() {
         Observable.from(Arrays.asList(1, 2, 3)).take(1).map(new Func1<Integer, Integer>() {
+            @Override
             public Integer call(Integer t1) {
                 throw new IllegalArgumentException("some error");
             }
@@ -92,6 +78,7 @@ public class OperatorTakeTest {
     @Test
     public void testTakeWithErrorHappeningInOnNext() {
         Observable<Integer> w = Observable.from(Arrays.asList(1, 2, 3)).take(2).map(new Func1<Integer, Integer>() {
+            @Override
             public Integer call(Integer t1) {
                 throw new IllegalArgumentException("some error");
             }
@@ -108,6 +95,7 @@ public class OperatorTakeTest {
     @Test
     public void testTakeWithErrorHappeningInTheLastOnNext() {
         Observable<Integer> w = Observable.from(Arrays.asList(1, 2, 3)).take(1).map(new Func1<Integer, Integer>() {
+            @Override
             public Integer call(Integer t1) {
                 throw new IllegalArgumentException("some error");
             }
@@ -361,5 +349,72 @@ public class OperatorTakeTest {
 
         }).take(1).subscribe(ts);
         assertEquals(1, requested.get());
+    }
+    
+    @Test
+    public void testInterrupt() throws InterruptedException {
+        final AtomicReference<Object> exception = new AtomicReference<Object>();
+        final CountDownLatch latch = new CountDownLatch(1);
+        Observable.just(1).subscribeOn(Schedulers.computation()).take(1).subscribe(new Action1<Integer>() {
+
+            @Override
+            public void call(Integer t1) {
+                try {
+                    Thread.sleep(100);
+                } catch (Exception e) {
+                    exception.set(e);
+                    e.printStackTrace();
+                } finally {
+                    latch.countDown();
+                }
+            }
+
+        });
+
+        latch.await();
+        assertNull(exception.get());
+    }
+    
+    @Test
+    public void testDoesntRequestMoreThanNeededFromUpstream() throws InterruptedException {
+        final AtomicLong requests = new AtomicLong();
+        TestSubscriber<Long> ts = new TestSubscriber<Long>(0);
+        Observable.interval(100, TimeUnit.MILLISECONDS)
+            //
+            .doOnRequest(new Action1<Long>() {
+                @Override
+                public void call(Long n) {
+                    requests.addAndGet(n);
+            }})
+            //
+            .take(2)
+            //
+            .subscribe(ts);
+        Thread.sleep(50);
+        ts.requestMore(1);
+        ts.requestMore(1);
+        ts.requestMore(1);
+        ts.awaitTerminalEvent();
+        ts.assertCompleted();
+        ts.assertNoErrors();
+        assertEquals(2,requests.get());
+    }
+    
+    @Test
+    public void takeFinalValueThrows() {
+        Observable<Integer> source = Observable.just(1).take(1);
+        
+        TestSubscriber<Integer> ts = new TestSubscriber<Integer>() {
+            @Override
+            public void onNext(Integer t) {
+                throw new TestException();
+            }
+        };
+        
+        source.subscribe(ts);
+        
+        ts.assertNoValues();
+        ts.assertError(TestException.class);
+        ts.assertNotCompleted();
     }
 }

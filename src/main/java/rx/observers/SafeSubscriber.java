@@ -16,7 +16,6 @@
 package rx.observers;
 
 import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
 import rx.Subscriber;
 import rx.exceptions.CompositeException;
@@ -26,7 +25,8 @@ import rx.exceptions.OnErrorNotImplementedException;
 import rx.plugins.RxJavaPlugins;
 
 /**
- * Wrapper around {@code Observer} that ensures compliance with the Rx contract.
+ * {@code SafeSubscriber} is a wrapper around {@code Subscriber} that ensures that the {@code Subscriber}
+ * complies with <a href="http://reactivex.io/documentation/contract.html">the Observable contract</a>.
  * <p>
  * The following is taken from <a href="http://go.microsoft.com/fwlink/?LinkID=205219">the Rx Design Guidelines
  * document</a>:
@@ -34,8 +34,8 @@ import rx.plugins.RxJavaPlugins;
  * Messages sent to instances of the {@code IObserver} interface follow the following grammar:
  * </p><blockquote><p> {@code OnNext* (OnCompleted | OnError)?} </p></blockquote><p>
  * This grammar allows observable sequences to send any amount (0 or more) of {@code OnNext} messages to the
- * subscribed observer instance, optionally followed by a single success ({@code OnCompleted}) or failure
- * ({@code OnError}) message.
+ * subscriber, optionally followed by a single success ({@code OnCompleted}) or failure ({@code OnError})
+ * message.
  * </p><p>
  * The single message indicating that an observable sequence has finished ensures that consumers of the
  * observable sequence can deterministically establish that it is safe to perform cleanup operations.
@@ -48,10 +48,10 @@ import rx.plugins.RxJavaPlugins;
  * <ul>
  * <li>Allows only single execution of either {@code onError} or {@code onCompleted}.</li>
  * <li>Ensures that once an {@code onCompleted} or {@code onError} is performed, no further calls can be executed</li>
- * <li>If {@code unsubscribe} is called, calls {@code completed} and forbids any further {@code onNext} calls.</li>
- * <li>When {@code onError} or {@code onComplete} occur, unsubscribes from the {@code Observable} (if executing asynchronously).</li>
+ * <li>If {@code unsubscribe} is called, calls {@code onCompleted} and forbids any further {@code onNext} calls.</li>
+ * <li>When {@code onError} or {@code onCompleted} occur, unsubscribes from the {@code Observable} (if executing asynchronously).</li>
  * </ul>
- * <p> {@code SafeSubscriber} will not synchronize {@code onNext} execution. Use {@link SerializedSubscriber} to do
+ * {@code SafeSubscriber} will not synchronize {@code onNext} execution. Use {@link SerializedSubscriber} to do
  * that.
  * 
  * @param <T>
@@ -68,6 +68,11 @@ public class SafeSubscriber<T> extends Subscriber<T> {
         this.actual = actual;
     }
 
+    /**
+     * Notifies the Subscriber that the {@code Observable} has finished sending push-based notifications.
+     * <p>
+     * The {@code Observable} will not call this method if it calls {@link #onError}.
+     */
     @Override
     public void onCompleted() {
         if (!done) {
@@ -87,6 +92,15 @@ public class SafeSubscriber<T> extends Subscriber<T> {
         }
     }
 
+    /**
+     * Notifies the Subscriber that the {@code Observable} has experienced an error condition.
+     * <p>
+     * If the {@code Observable} calls this method, it will not thereafter call {@link #onNext} or
+     * {@link #onCompleted}.
+     * 
+     * @param e
+     *          the exception encountered by the Observable
+     */
     @Override
     public void onError(Throwable e) {
         // we handle here instead of another method so we don't add stacks to the frame
@@ -98,6 +112,17 @@ public class SafeSubscriber<T> extends Subscriber<T> {
         }
     }
 
+    /**
+     * Provides the Subscriber with a new item to observe.
+     * <p>
+     * The {@code Observable} may call this method 0 or more times.
+     * <p>
+     * The {@code Observable} will not call this method again after it calls either {@link #onCompleted} or
+     * {@link #onError}.
+     * 
+     * @param args
+     *          the item emitted by the Observable
+     */
     @Override
     public void onNext(T args) {
         try {
@@ -114,7 +139,8 @@ public class SafeSubscriber<T> extends Subscriber<T> {
     }
 
     /**
-     * The logic for {@code onError} without the {@code isFinished} check so it can be called from within {@code onCompleted}.
+     * The logic for {@code onError} without the {@code isFinished} check so it can be called from within
+     * {@code onCompleted}.
      * 
      * @see <a href="https://github.com/ReactiveX/RxJava/issues/630">the report of this bug</a>
      */

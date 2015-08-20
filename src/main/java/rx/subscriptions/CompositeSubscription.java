@@ -1,12 +1,12 @@
 /**
  * Copyright 2014 Netflix, Inc.
- * 
+ *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
- * 
+ *
  * http://www.apache.org/licenses/LICENSE-2.0
- * 
+ *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -23,17 +23,15 @@ import java.util.List;
 import java.util.Set;
 
 import rx.Subscription;
-import rx.exceptions.CompositeException;
+import rx.exceptions.*;
 
 /**
  * Subscription that represents a group of Subscriptions that are unsubscribed together.
- * 
- * @see <a href="http://msdn.microsoft.com/en-us/library/system.reactive.disposables.compositedisposable(v=vs.103).aspx">Rx.Net equivalent CompositeDisposable</a>
  */
 public final class CompositeSubscription implements Subscription {
 
     private Set<Subscription> subscriptions;
-    private boolean unsubscribed = false;
+    private volatile boolean unsubscribed;
 
     public CompositeSubscription() {
     }
@@ -43,7 +41,7 @@ public final class CompositeSubscription implements Subscription {
     }
 
     @Override
-    public synchronized boolean isUnsubscribed() {
+    public boolean isUnsubscribed() {
         return unsubscribed;
     }
 
@@ -57,21 +55,22 @@ public final class CompositeSubscription implements Subscription {
      *          the {@link Subscription} to add
      */
     public void add(final Subscription s) {
-        Subscription unsubscribe = null;
-        synchronized (this) {
-            if (unsubscribed) {
-                unsubscribe = s;
-            } else {
-                if (subscriptions == null) {
-                    subscriptions = new HashSet<Subscription>(4);
+        if (s.isUnsubscribed()) {
+            return;
+        }
+        if (!unsubscribed) {
+            synchronized (this) {
+                if (!unsubscribed) {
+                    if (subscriptions == null) {
+                        subscriptions = new HashSet<Subscription>(4);
+                    }
+                    subscriptions.add(s);
+                    return;
                 }
-                subscriptions.add(s);
             }
         }
-        if (unsubscribe != null) {
-            // call after leaving the synchronized block so we're not holding a lock while executing this
-            unsubscribe.unsubscribe();
-        }
+        // call after leaving the synchronized block so we're not holding a lock while executing this
+        s.unsubscribe();
     }
 
     /**
@@ -82,16 +81,18 @@ public final class CompositeSubscription implements Subscription {
      *          the {@link Subscription} to remove
      */
     public void remove(final Subscription s) {
-        boolean unsubscribe = false;
-        synchronized (this) {
-            if (unsubscribed || subscriptions == null) {
-                return;
+        if (!unsubscribed) {
+            boolean unsubscribe = false;
+            synchronized (this) {
+                if (unsubscribed || subscriptions == null) {
+                    return;
+                }
+                unsubscribe = subscriptions.remove(s);
             }
-            unsubscribe = subscriptions.remove(s);
-        }
-        if (unsubscribe) {
-            // if we removed successfully we then need to call unsubscribe on it (outside of the lock)
-            s.unsubscribe();
+            if (unsubscribe) {
+                // if we removed successfully we then need to call unsubscribe on it (outside of the lock)
+                s.unsubscribe();
+            }
         }
     }
 
@@ -101,28 +102,35 @@ public final class CompositeSubscription implements Subscription {
      * an unoperative state.
      */
     public void clear() {
-        Collection<Subscription> unsubscribe = null;
-        synchronized (this) {
-            if (unsubscribed || subscriptions == null) {
-                return;
-            } else {
-                unsubscribe = subscriptions;
-                subscriptions = null;
+        if (!unsubscribed) {
+            Collection<Subscription> unsubscribe = null;
+            synchronized (this) {
+                if (unsubscribed || subscriptions == null) {
+                    return;
+                } else {
+                    unsubscribe = subscriptions;
+                    subscriptions = null;
+                }
             }
+            unsubscribeFromAll(unsubscribe);
         }
-        unsubscribeFromAll(unsubscribe);
     }
 
     @Override
     public void unsubscribe() {
-        synchronized (this) {
-            if (unsubscribed) {
-                return;
+        if (!unsubscribed) {
+            Collection<Subscription> unsubscribe = null;
+            synchronized (this) {
+                if (unsubscribed) {
+                    return;
+                }
+                unsubscribed = true;
+                unsubscribe = subscriptions;
+                subscriptions = null;
             }
-            unsubscribed = true;
+            // we will only get here once
+            unsubscribeFromAll(unsubscribe);
         }
-        // we will only get here once
-        unsubscribeFromAll(subscriptions);
     }
 
     private static void unsubscribeFromAll(Collection<Subscription> subscriptions) {
@@ -140,19 +148,21 @@ public final class CompositeSubscription implements Subscription {
                 es.add(e);
             }
         }
-        if (es != null) {
-            if (es.size() == 1) {
-                Throwable t = es.get(0);
-                if (t instanceof RuntimeException) {
-                    throw (RuntimeException) t;
-                } else {
-                    throw new CompositeException(
-                            "Failed to unsubscribe to 1 or more subscriptions.", es);
-                }
-            } else {
-                throw new CompositeException(
-                        "Failed to unsubscribe to 2 or more subscriptions.", es);
+        Exceptions.throwIfAny(es);
+    }
+
+    /**
+     * Returns true if this composite is not unsubscribed and contains subscriptions.
+     *
+     * @return {@code true} if this composite is not unsubscribed and contains subscriptions.
+     * @since 1.0.7
+     */
+    public boolean hasSubscriptions() {
+        if (!unsubscribed) {
+            synchronized (this) {
+                return !unsubscribed && subscriptions != null && !subscriptions.isEmpty();
             }
         }
+        return false;
     }
 }

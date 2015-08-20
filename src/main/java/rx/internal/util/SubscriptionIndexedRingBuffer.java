@@ -27,19 +27,12 @@ import rx.functions.Func1;
  */
 public final class SubscriptionIndexedRingBuffer<T extends Subscription> implements Subscription {
 
-    @SuppressWarnings("unchecked")
     private volatile IndexedRingBuffer<T> subscriptions = IndexedRingBuffer.getInstance();
     private volatile int unsubscribed = 0;
     @SuppressWarnings("rawtypes")
     private final static AtomicIntegerFieldUpdater<SubscriptionIndexedRingBuffer> UNSUBSCRIBED = AtomicIntegerFieldUpdater.newUpdater(SubscriptionIndexedRingBuffer.class, "unsubscribed");
 
     public SubscriptionIndexedRingBuffer() {
-    }
-
-    public SubscriptionIndexedRingBuffer(final T... subscriptions) {
-        for (T t : subscriptions) {
-            this.subscriptions.add(t);
-        }
     }
 
     @Override

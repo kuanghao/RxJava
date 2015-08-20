@@ -23,13 +23,10 @@ import rx.Subscription;
 /**
  * Subscription that can be checked for status such as in a loop inside an {@link Observable} to exit the loop
  * if unsubscribed.
- * 
- * @see <a href="http://msdn.microsoft.com/en-us/library/system.reactive.disposables.multipleassignmentdisposable">Rx.Net equivalent MultipleAssignmentDisposable</a>
  */
 public final class MultipleAssignmentSubscription implements Subscription {
-    /** The shared empty state. */
-    static final State EMPTY_STATE = new State(false, Subscriptions.empty());
-    volatile State state = EMPTY_STATE;
+
+    volatile State state = new State(false, Subscriptions.empty());
     static final AtomicReferenceFieldUpdater<MultipleAssignmentSubscription, State> STATE_UPDATER
             = AtomicReferenceFieldUpdater.newUpdater(MultipleAssignmentSubscription.class, State.class, "state");
     

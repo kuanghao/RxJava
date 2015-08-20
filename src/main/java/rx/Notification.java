@@ -17,10 +17,8 @@ package rx;
 
 /**
  * An object representing a notification sent to an {@link Observable}.
- * 
- * @see <a href="http://msdn.microsoft.com/en-us/library/hh229462.aspx">the Microsoft Rx equivalent</a>
  */
-public class Notification<T> {
+public final class Notification<T> {
 
     private final Kind kind;
     private final Throwable throwable;
@@ -164,7 +162,7 @@ public class Notification<T> {
         }
     }
 
-    public static enum Kind {
+    public enum Kind {
         OnNext, OnError, OnCompleted
     }
 

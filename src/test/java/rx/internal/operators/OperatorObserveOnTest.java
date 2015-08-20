@@ -26,7 +26,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -34,7 +36,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.junit.Ignore;
 import org.junit.Test;
 import org.mockito.InOrder;
 
@@ -398,6 +399,7 @@ public class OperatorObserveOnTest {
     @Test
     public void testAfterUnsubscribeCalledThenObserverOnNextNeverCalled() {
         final TestScheduler testScheduler = new TestScheduler();
+        @SuppressWarnings("unchecked")
         final Observer<Integer> observer = mock(Observer.class);
         final Subscription subscription = Observable.just(1, 2, 3)
                 .observeOn(testScheduler)
@@ -609,47 +611,50 @@ public class OperatorObserveOnTest {
 
     @Test
     public void testOnErrorCutsAheadOfOnNext() {
-        final PublishSubject<Long> subject = PublishSubject.create();
-
-        final AtomicLong counter = new AtomicLong();
-        TestSubscriber<Long> ts = new TestSubscriber<Long>(new Observer<Long>() {
-
-            @Override
-            public void onCompleted() {
-
-            }
-
-            @Override
-            public void onError(Throwable e) {
-
-            }
-
-            @Override
-            public void onNext(Long t) {
-                // simulate slow consumer to force backpressure failure
-                try {
-                    Thread.sleep(1);
-                } catch (InterruptedException e) {
+        for (int i = 0; i < 50; i++) {
+            final PublishSubject<Long> subject = PublishSubject.create();
+    
+            final AtomicLong counter = new AtomicLong();
+            TestSubscriber<Long> ts = new TestSubscriber<Long>(new Observer<Long>() {
+    
+                @Override
+                public void onCompleted() {
+    
                 }
+    
+                @Override
+                public void onError(Throwable e) {
+    
+                }
+    
+                @Override
+                public void onNext(Long t) {
+                    // simulate slow consumer to force backpressure failure
+                    try {
+                        Thread.sleep(1);
+                    } catch (InterruptedException e) {
+                    }
+                }
+    
+            });
+            subject.observeOn(Schedulers.computation()).subscribe(ts);
+    
+            // this will blow up with backpressure
+            while (counter.get() < 102400) {
+                subject.onNext(counter.get());
+                counter.incrementAndGet();
             }
-
-        });
-        subject.observeOn(Schedulers.computation()).subscribe(ts);
-
-        // this will blow up with backpressure
-        while (counter.get() < 102400) {
-            subject.onNext(counter.get());
-            counter.incrementAndGet();
+    
+            ts.awaitTerminalEvent();
+            assertEquals(1, ts.getOnErrorEvents().size());
+            assertTrue(ts.getOnErrorEvents().get(0) instanceof MissingBackpressureException);
+            // assert that the values are sequential, that cutting in didn't allow skipping some but emitting others.
+            // example [0, 1, 2] not [0, 1, 4]
+            List<Long> onNextEvents = ts.getOnNextEvents();
+            assertTrue(onNextEvents.isEmpty() || onNextEvents.size() == onNextEvents.get(onNextEvents.size() - 1) + 1);
+            // we should emit the error without emitting the full buffer size
+            assertTrue(onNextEvents.size() < RxRingBuffer.SIZE);
         }
-
-        ts.awaitTerminalEvent();
-        assertEquals(1, ts.getOnErrorEvents().size());
-        assertTrue(ts.getOnErrorEvents().get(0) instanceof MissingBackpressureException);
-        // assert that the values are sequential, that cutting in didn't allow skipping some but emitting others.
-        // example [0, 1, 2] not [0, 1, 4]
-        assertTrue(ts.getOnNextEvents().size() == ts.getOnNextEvents().get(ts.getOnNextEvents().size() - 1) + 1);
-        // we should emit the error without emitting the full buffer size
-        assertTrue(ts.getOnNextEvents().size() < RxRingBuffer.SIZE);
     }
 
     /**
@@ -658,7 +663,7 @@ public class OperatorObserveOnTest {
     @Test
     public void testHotOperatorBackpressure() {
         TestSubscriber<String> ts = new TestSubscriber<String>();
-        Observable.timer(0, 1, TimeUnit.MICROSECONDS)
+        Observable.interval(0, 1, TimeUnit.MICROSECONDS)
                 .observeOn(Schedulers.computation())
                 .map(new Func1<Long, String>() {
 
@@ -682,12 +687,12 @@ public class OperatorObserveOnTest {
 
     @Test
     public void testErrorPropagatesWhenNoOutstandingRequests() {
-        Observable<Long> timer = Observable.timer(0, 1, TimeUnit.MICROSECONDS)
+        Observable<Long> timer = Observable.interval(0, 1, TimeUnit.MICROSECONDS)
                 .doOnEach(new Action1<Notification<? super Long>>() {
 
                     @Override
                     public void call(Notification<? super Long> n) {
-                        //                        System.out.println("BEFORE " + n);
+                        //                                                System.out.println("BEFORE " + n);
                     }
 
                 })
@@ -696,7 +701,11 @@ public class OperatorObserveOnTest {
 
                     @Override
                     public void call(Notification<? super Long> n) {
-                        //                        System.out.println("AFTER " + n);
+                        try {
+                            Thread.sleep(100);
+                        } catch (InterruptedException e) {
+                        }
+                        //                                                System.out.println("AFTER " + n);
                     }
 
                 });
@@ -717,4 +726,83 @@ public class OperatorObserveOnTest {
         assertEquals(MissingBackpressureException.class, ts.getOnErrorEvents().get(0).getClass());
     }
 
+    @Test
+    public void testRequestOverflow() throws InterruptedException {
+
+        final CountDownLatch latch = new CountDownLatch(1);
+        final AtomicInteger count = new AtomicInteger();
+        Observable.range(1, 100).observeOn(Schedulers.computation())
+                .subscribe(new Subscriber<Integer>() {
+
+                    boolean first = true;
+                    
+                    @Override
+                    public void onStart() {
+                        request(2);
+                    }
+
+                    @Override
+                    public void onCompleted() {
+                        latch.countDown();
+                    }
+
+                    @Override
+                    public void onError(Throwable e) {
+
+                    }
+
+                    @Override
+                    public void onNext(Integer t) {
+                        count.incrementAndGet();
+                        if (first) {
+                            request(Long.MAX_VALUE - 1);
+                            request(Long.MAX_VALUE - 1);
+                            request(10);
+                            first = false;
+                        }
+                    }
+                });
+        assertTrue(latch.await(10, TimeUnit.SECONDS));
+        assertEquals(100, count.get());
+
+    }
+    
+    @Test
+    public void testNoMoreRequestsAfterUnsubscribe() throws InterruptedException {
+        final CountDownLatch latch = new CountDownLatch(1);
+        final List<Long> requests = Collections.synchronizedList(new ArrayList<Long>());
+        Observable.range(1, 1000000)
+                .doOnRequest(new Action1<Long>() {
+
+                    @Override
+                    public void call(Long n) {
+                        requests.add(n);
+                    }
+                })
+                .observeOn(Schedulers.io())
+                .subscribe(new Subscriber<Integer>() {
+
+                    @Override
+                    public void onStart() {
+                        request(1);
+                    }
+
+                    @Override
+                    public void onCompleted() {
+                    }
+
+                    @Override
+                    public void onError(Throwable e) {
+                    }
+
+                    @Override
+                    public void onNext(Integer t) {
+                        unsubscribe();
+                        latch.countDown();
+                    }
+                });
+        assertTrue(latch.await(10, TimeUnit.SECONDS));
+        assertEquals(1, requests.size());
+    }
+    
 }

@@ -23,7 +23,7 @@ package rx;
  * {@code Observable} will call an Observer's {@link #onCompleted} method exactly once or the Observer's
  * {@link #onError} method exactly once.
  * 
- * @see <a href="https://github.com/ReactiveX/RxJava/wiki/Observable">RxJava Wiki: Observable</a>
+ * @see <a href="http://reactivex.io/documentation/observable.html">ReactiveX documentation: Observable</a>
  * @param <T>
  *          the type of item the Observer expects to observe
  */
@@ -34,7 +34,7 @@ public interface Observer<T> {
      * <p>
      * The {@link Observable} will not call this method if it calls {@link #onError}.
      */
-    public abstract void onCompleted();
+    void onCompleted();
 
     /**
      * Notifies the Observer that the {@link Observable} has experienced an error condition.
@@ -45,19 +45,19 @@ public interface Observer<T> {
      * @param e
      *          the exception encountered by the Observable
      */
-    public abstract void onError(Throwable e);
+    void onError(Throwable e);
 
     /**
      * Provides the Observer with a new item to observe.
      * <p>
-     * The {@link Observable} may call this closure 0 or more times.
+     * The {@link Observable} may call this method 0 or more times.
      * <p>
-     * The {@code Observable} will not call this closure again after it calls either {@link #onCompleted} or
+     * The {@code Observable} will not call this method again after it calls either {@link #onCompleted} or
      * {@link #onError}.
      * 
      * @param t
      *          the item emitted by the Observable
      */
-    public abstract void onNext(T t);
+    void onNext(T t);
 
 }

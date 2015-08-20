@@ -36,6 +36,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import junit.framework.Assert;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.InOrder;
@@ -830,7 +832,6 @@ public class OperatorZipTest {
 
     @Test
     public void testStartAsync() throws InterruptedException {
-        final CountDownLatch latch = new CountDownLatch(1);
         Observable<String> os = ASYNC_OBSERVABLE_OF_INFINITE_INTEGERS(new CountDownLatch(1)).onBackpressureBuffer()
                 .zipWith(ASYNC_OBSERVABLE_OF_INFINITE_INTEGERS(new CountDownLatch(1)).onBackpressureBuffer(), new Func2<Integer, Integer, String>() {
 
@@ -1217,5 +1218,99 @@ public class OperatorZipTest {
             }
 
         });
+    }
+
+    @Test(timeout = 30000)
+    public void testIssue1812() {
+        // https://github.com/ReactiveX/RxJava/issues/1812
+        Observable<Integer> zip1 = Observable.zip(Observable.range(0, 1026), Observable.range(0, 1026),
+                new Func2<Integer, Integer, Integer>() {
+
+                    @Override
+                    public Integer call(Integer i1, Integer i2) {
+                        return i1 + i2;
+                    }
+                });
+        Observable<Integer> zip2 = Observable.zip(zip1, Observable.range(0, 1026),
+                new Func2<Integer, Integer, Integer>() {
+
+                    @Override
+                    public Integer call(Integer i1, Integer i2) {
+                        return i1 + i2;
+                    }
+                });
+        List<Integer> expected = new ArrayList<Integer>();
+        for (int i = 0; i < 1026; i++) {
+            expected.add(i * 3);
+        }
+        assertEquals(expected, zip2.toList().toBlocking().single());
+    }
+    @Test
+    public void testUnboundedDownstreamOverrequesting() {
+        Observable<Integer> source = Observable.range(1, 2).zipWith(Observable.range(1, 2), new Func2<Integer, Integer, Integer>() {
+            @Override
+            public Integer call(Integer t1, Integer t2) {
+                return t1 + 10 * t2;
+            }
+        });
+        
+        TestSubscriber<Integer> ts = new TestSubscriber<Integer>() {
+            @Override
+            public void onNext(Integer t) {
+                super.onNext(t);
+                requestMore(5);
+            }
+        };
+        
+        source.subscribe(ts);
+        
+        ts.assertNoErrors();
+        ts.assertTerminalEvent();
+        ts.assertReceivedOnNext(Arrays.asList(11, 22));
+    }
+    @Test(timeout = 10000)
+    public void testZipRace() {
+        long startTime = System.currentTimeMillis();
+        Observable<Integer> src = Observable.just(1).subscribeOn(Schedulers.computation());
+        
+        // now try and generate a hang by zipping src with itself repeatedly. A
+        // time limit of 9 seconds ( 1 second less than the test timeout) is
+        // used so that this test will not timeout on slow machines.
+        int i = 0;
+        while (System.currentTimeMillis()-startTime < 9000 && i++ < 100000) {
+            int value = Observable.zip(src, src, new Func2<Integer, Integer, Integer>() {
+                @Override
+                public Integer call(Integer t1, Integer t2) {
+                    return t1 + t2 * 10;
+                }
+            }).toBlocking().singleOrDefault(0);
+            
+            Assert.assertEquals(11, value);
+        }
+    }
+    /** 
+     * Request only a single value and don't wait for another request just
+     * to emit an onCompleted.
+     */
+    @Test
+    public void testZipRequest1() {
+        Observable<Integer> src = Observable.just(1).subscribeOn(Schedulers.computation());
+        TestSubscriber<Integer> ts = new TestSubscriber<Integer>() {
+            @Override
+            public void onStart() {
+                requestMore(1);
+            }
+        };
+        
+        Observable.zip(src, src, new Func2<Integer, Integer, Integer>() {
+            @Override
+            public Integer call(Integer t1, Integer t2) {
+                return t1 + t2 * 10;
+            }
+        }).subscribe(ts);
+        
+        ts.awaitTerminalEvent(1, TimeUnit.SECONDS);
+        ts.assertNoErrors();
+        ts.assertReceivedOnNext(Arrays.asList(11));
     }
 }

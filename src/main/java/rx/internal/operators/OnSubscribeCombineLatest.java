@@ -49,10 +49,10 @@ public final class OnSubscribeCombineLatest<T, R> implements OnSubscribe<R> {
     public OnSubscribeCombineLatest(List<? extends Observable<? extends T>> sources, FuncN<? extends R> combinator) {
         this.sources = sources;
         this.combinator = combinator;
-        if (sources.size() > 128) {
-            // For design simplicity this is limited to 128. If more are really needed we'll need to adjust 
-            // the design of how RxRingBuffer is used in the implementation below.
-            throw new IllegalArgumentException("More than 128 sources to combineLatest is not supported.");
+        if (sources.size() > RxRingBuffer.SIZE) {
+            // For design simplicity this is limited to RxRingBuffer.SIZE. If more are really needed we'll need to
+            // adjust the design of how RxRingBuffer is used in the implementation below.
+            throw new IllegalArgumentException("More than RxRingBuffer.SIZE sources to combineLatest is not supported.");
         }
     }
 
@@ -110,7 +110,7 @@ public final class OnSubscribeCombineLatest<T, R> implements OnSubscribe<R> {
 
         @Override
         public void request(long n) {
-            requested.getAndAdd(n);
+            BackpressureUtils.getAndAddRequest(requested, n);
             if (!started.get() && started.compareAndSet(false, true)) {
                 /*
                  * NOTE: this logic will ONLY work if we don't have more sources than the size of the buffer.
@@ -230,9 +230,14 @@ public final class OnSubscribeCombineLatest<T, R> implements OnSubscribe<R> {
         }
 
         public void requestUpTo(long n) {
-            long r = Math.min(emitted.get(), n);
-            request(r);
-            emitted.addAndGet(-r);
+            do {
+                long r = emitted.get();
+                long u = Math.min(r, n);
+                if (emitted.compareAndSet(r, r - u)) {
+                    request(u);
+                    break;
+                }
+            } while (true);
         }
 
         @Override

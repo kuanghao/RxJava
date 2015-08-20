@@ -15,7 +15,12 @@
  */
 package rx.subjects;
 
+import java.lang.reflect.Array;
+import java.util.*;
+
 import rx.Observer;
+import rx.annotations.Experimental;
+import rx.exceptions.Exceptions;
 import rx.functions.Action1;
 import rx.internal.operators.NotificationLite;
 import rx.subjects.SubjectSubscriptionManager.SubjectObserver;
@@ -104,9 +109,19 @@ public final class AsyncSubject<T> extends Subject<T, T> {
     public void onError(final Throwable e) {
         if (state.active) {
             Object n = nl.error(e);
+            List<Throwable> errors = null;
             for (SubjectObserver<T> bo : state.terminate(n)) {
-                bo.onError(e);
+                try {
+                    bo.onError(e);
+                } catch (Throwable e2) {
+                    if (errors == null) {
+                        errors = new ArrayList<Throwable>();
+                    }
+                    errors.add(e2);
+                }
             }
+
+            Exceptions.throwIfAny(errors);
         }
     }
 
@@ -115,4 +130,96 @@ public final class AsyncSubject<T> extends Subject<T, T> {
         lastValue = nl.next(v);
     }
 
+    @Override
+    public boolean hasObservers() {
+        return state.observers().length > 0;
+    }
+    /**
+     * Check if the Subject has a value.
+     * <p>Use the {@link #getValue()} method to retrieve such a value.
+     * <p>Note that unless {@link #hasCompleted()} or {@link #hasThrowable()} returns true, the value
+     * retrieved by {@code getValue()} may get outdated.
+     * @return true if and only if the subject has some value but not an error
+     */
+    @Experimental
+    @Override
+    public boolean hasValue() {
+        Object v = lastValue;
+        Object o = state.get();
+        return !nl.isError(o) && nl.isNext(v);
+    }
+    /**
+     * Check if the Subject has terminated with an exception.
+     * @return true if the subject has received a throwable through {@code onError}.
+     */
+    @Experimental
+    @Override
+    public boolean hasThrowable() {
+        Object o = state.get();
+        return nl.isError(o);
+    }
+    /**
+     * Check if the Subject has terminated normally.
+     * @return true if the subject completed normally via {@code onCompleted()}
+     */
+    @Experimental
+    @Override
+    public boolean hasCompleted() {
+        Object o = state.get();
+        return o != null && !nl.isError(o);
+    }
+    /**
+     * Returns the current value of the Subject if there is such a value and
+     * the subject hasn't terminated with an exception.
+     * <p>The method can return {@code null} for various reasons. Use {@link #hasValue()}, {@link #hasThrowable()}
+     * and {@link #hasCompleted()} to determine if such {@code null} is a valid value, there was an
+     * exception or the Subject terminated without receiving any value. 
+     * @return the current value or {@code null} if the Subject doesn't have a value,
+     * has terminated with an exception or has an actual {@code null} as a value.
+     */
+    @Experimental
+    @Override
+    public T getValue() {
+        Object v = lastValue;
+        Object o = state.get();
+        if (!nl.isError(o) && nl.isNext(v)) {
+            return nl.getValue(v);
+        }
+        return null;
+    }
+    /**
+     * Returns the Throwable that terminated the Subject.
+     * @return the Throwable that terminated the Subject or {@code null} if the
+     * subject hasn't terminated yet or it terminated normally.
+     */
+    @Experimental
+    @Override
+    public Throwable getThrowable() {
+        Object o = state.get();
+        if (nl.isError(o)) {
+            return nl.getError(o);
+        }
+        return null;
+    }
+    @Override
+    @Experimental
+    @SuppressWarnings("unchecked")
+    public T[] getValues(T[] a) {
+        Object v = lastValue;
+        Object o = state.get();
+        if (!nl.isError(o) && nl.isNext(v)) {
+            T val = nl.getValue(v);
+            if (a.length == 0) {
+                a = (T[])Array.newInstance(a.getClass().getComponentType(), 1);
+            }
+            a[0] = val;
+            if (a.length > 1) {
+                a[1] = null;
+            }
+        } else
+        if (a.length > 0) {
+            a[0] = null;
+        }
+        return a;
+    }
 }

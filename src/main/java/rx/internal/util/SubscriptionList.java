@@ -15,14 +15,10 @@
  */
 package rx.internal.util;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 
 import rx.Subscription;
-import rx.exceptions.CompositeException;
+import rx.exceptions.Exceptions;
 
 /**
  * Subscription that represents a group of Subscriptions that are unsubscribed together.
@@ -31,8 +27,8 @@ import rx.exceptions.CompositeException;
  */
 public final class SubscriptionList implements Subscription {
 
-    private List<Subscription> subscriptions;
-    private boolean unsubscribed = false;
+    private LinkedList<Subscription> subscriptions;
+    private volatile boolean unsubscribed;
 
     public SubscriptionList() {
     }
@@ -41,8 +37,13 @@ public final class SubscriptionList implements Subscription {
         this.subscriptions = new LinkedList<Subscription>(Arrays.asList(subscriptions));
     }
 
+    public SubscriptionList(Subscription s) {
+        this.subscriptions = new LinkedList<Subscription>();
+        this.subscriptions.add(s);
+    }
+
     @Override
-    public synchronized boolean isUnsubscribed() {
+    public boolean isUnsubscribed() {
         return unsubscribed;
     }
 
@@ -55,20 +56,40 @@ public final class SubscriptionList implements Subscription {
      *          the {@link Subscription} to add
      */
     public void add(final Subscription s) {
-        Subscription unsubscribe = null;
-        synchronized (this) {
-            if (unsubscribed) {
-                unsubscribe = s;
-            } else {
-                if (subscriptions == null) {
-                    subscriptions = new LinkedList<Subscription>();
+        if (s.isUnsubscribed()) {
+            return;
+        }
+        if (!unsubscribed) {
+            synchronized (this) {
+                if (!unsubscribed) {
+                    LinkedList<Subscription> subs = subscriptions;
+                    if (subs == null) {
+                        subs = new LinkedList<Subscription>();
+                        subscriptions = subs;
+                    }
+                    subs.add(s);
+                    return;
                 }
-                subscriptions.add(s);
             }
         }
-        if (unsubscribe != null) {
-            // call after leaving the synchronized block so we're not holding a lock while executing this
-            unsubscribe.unsubscribe();
+        // call after leaving the synchronized block so we're not holding a lock while executing this
+        s.unsubscribe();
+    }
+
+    public void remove(final Subscription s) {
+        if (!unsubscribed) {
+            boolean unsubscribe = false;
+            synchronized (this) {
+                LinkedList<Subscription> subs = subscriptions;
+                if (unsubscribed || subs == null) {
+                    return;
+                }
+                unsubscribe = subs.remove(s);
+            }
+            if (unsubscribe) {
+                // if we removed successfully we then need to call unsubscribe on it (outside of the lock)
+                s.unsubscribe();
+            }
         }
     }
 
@@ -78,15 +99,19 @@ public final class SubscriptionList implements Subscription {
      */
     @Override
     public void unsubscribe() {
-        synchronized (this) {
-            if (unsubscribed) {
-                return;
+        if (!unsubscribed) {
+            List<Subscription> list;
+            synchronized (this) {
+                if (unsubscribed) {
+                    return;
+                }
+                unsubscribed = true;
+                list = subscriptions;
+                subscriptions = null;
             }
-            unsubscribed = true;
+            // we will only get here once
+            unsubscribeFromAll(list);
         }
-        // we will only get here once
-        unsubscribeFromAll(subscriptions);
-        subscriptions = null;
     }
 
     private static void unsubscribeFromAll(Collection<Subscription> subscriptions) {
@@ -104,19 +129,29 @@ public final class SubscriptionList implements Subscription {
                 es.add(e);
             }
         }
-        if (es != null) {
-            if (es.size() == 1) {
-                Throwable t = es.get(0);
-                if (t instanceof RuntimeException) {
-                    throw (RuntimeException) t;
-                } else {
-                    throw new CompositeException(
-                            "Failed to unsubscribe to 1 or more subscriptions.", es);
-                }
-            } else {
-                throw new CompositeException(
-                        "Failed to unsubscribe to 2 or more subscriptions.", es);
+        Exceptions.throwIfAny(es);
+    }
+    /* perf support */
+    public void clear() {
+        if (!unsubscribed) {
+            List<Subscription> list;
+            synchronized (this) {
+                list = subscriptions;
+                subscriptions = null;
+            }
+            unsubscribeFromAll(list);
+        }
+    }
+    /**
+     * Returns true if this composite is not unsubscribed and contains subscriptions.
+     * @return {@code true} if this composite is not unsubscribed and contains subscriptions.
+     */
+    public boolean hasSubscriptions() {
+        if (!unsubscribed) {
+            synchronized (this) {
+                return !unsubscribed && subscriptions != null && !subscriptions.isEmpty();
             }
         }
+        return false;
     }
 }

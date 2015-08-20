@@ -790,6 +790,13 @@ public class OnSubscribeCombineLatestTest {
     }
 
     @Test
+    public void testBackpressureLoop() {
+        for (int i = 0; i < 5000; i++) {
+            testBackpressure();
+        }
+    }
+    
+    @Test
     public void testBackpressure() {
         Func2<String, Integer, String> combineLatestFunction = getConcatStringIntegerCombineLatestFunction();
 
@@ -813,7 +820,7 @@ public class OnSubscribeCombineLatestTest {
         final CountDownLatch latch = new CountDownLatch(1);
         final AtomicInteger count = new AtomicInteger();
         final int SIZE = 2000;
-        Observable<Long> timer = Observable.timer(0, 1, TimeUnit.MILLISECONDS)
+        Observable<Long> timer = Observable.interval(0, 1, TimeUnit.MILLISECONDS)
                 .observeOn(Schedulers.newThread())
                 .doOnEach(new Action1<Notification<? super Long>>() {
 
@@ -843,6 +850,41 @@ public class OnSubscribeCombineLatestTest {
         }
 
         assertEquals(SIZE, count.get());
+    }
+    
+    @Test(timeout=10000)
+    public void testCombineLatestRequestOverflow() throws InterruptedException {
+        List<Observable<Integer>> sources = Arrays.asList(Observable.from(Arrays.asList(1,2,3,4)), Observable.from(Arrays.asList(5,6,7,8)));
+        Observable<Integer> o = Observable.combineLatest(sources,new FuncN<Integer>() {
+            @Override
+            public Integer call(Object... args) {
+               return (Integer) args[0];
+            }});
+        //should get at least 4
+        final CountDownLatch latch = new CountDownLatch(4);
+        o.subscribeOn(Schedulers.computation()).subscribe(new Subscriber<Integer>() {
+            
+            @Override
+            public void onStart() {
+                request(2);
+            }
+
+            @Override
+            public void onCompleted() {
+                //ignore
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                throw new RuntimeException(e);
+            }
+
+            @Override
+            public void onNext(Integer t) {
+                latch.countDown();
+                request(Long.MAX_VALUE-1);
+            }});
+        assertTrue(latch.await(10, TimeUnit.SECONDS));
     }
 
 }

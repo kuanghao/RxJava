@@ -15,16 +15,18 @@
  */
 package rx.subjects;
 
-import java.util.ArrayList;
+import java.lang.reflect.Array;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 
+import rx.*;
 import rx.Observer;
-import rx.Scheduler;
-import rx.functions.Action1;
-import rx.functions.Func1;
-import rx.functions.Functions;
+import rx.annotations.Experimental;
+import rx.exceptions.Exceptions;
+import rx.functions.*;
 import rx.internal.operators.NotificationLite;
+import rx.internal.util.UtilityFunctions;
 import rx.schedulers.Timestamped;
 import rx.subjects.ReplaySubject.NodeList.Node;
 import rx.subjects.SubjectSubscriptionManager.SubjectObserver;
@@ -99,6 +101,42 @@ public final class ReplaySubject<T> extends Subject<T, T> {
                 o.index(lastIndex);
             }
         };
+        ssm.onAdded = new Action1<SubjectObserver<T>>() {
+            @Override
+            public void call(SubjectObserver<T> o) {
+                synchronized (o) {
+                    if (!o.first || o.emitting) {
+                        return;
+                    }
+                    o.first = false;
+                    o.emitting = true;
+                }
+                boolean skipFinal = false;
+                try {
+                    for (;;) {
+                        int idx = o.<Integer>index();
+                        int sidx = state.index;
+                        if (idx != sidx) {
+                            Integer j = state.replayObserverFromIndex(idx, o);
+                            o.index(j);
+                        }
+                        synchronized (o) {
+                            if (sidx == state.index) {
+                                o.emitting = false;
+                                skipFinal = true;
+                                break;
+                            }
+                        }
+                    }
+                } finally {
+                    if (!skipFinal) {
+                        synchronized (o) {
+                            o.emitting = false;
+                        }
+                    }
+                }
+            }
+        };
         ssm.onTerminated = new Action1<SubjectObserver<T>>() {
             @Override
             public void call(SubjectObserver<T> o) {
@@ -129,8 +167,8 @@ public final class ReplaySubject<T> extends Subject<T, T> {
     /* public */ static <T> ReplaySubject<T> createUnbounded() {
         final BoundedState<T> state = new BoundedState<T>(
             new EmptyEvictionPolicy(),
-            Functions.identity(),
-            Functions.identity()
+            UtilityFunctions.identity(),
+            UtilityFunctions.identity()
         );
         return createWithState(state, new DefaultOnAdd<T>(state));
     }
@@ -157,8 +195,8 @@ public final class ReplaySubject<T> extends Subject<T, T> {
     public static <T> ReplaySubject<T> createWithSize(int size) {
         final BoundedState<T> state = new BoundedState<T>(
             new SizeEvictionPolicy(size),
-            Functions.identity(),
-            Functions.identity()
+            UtilityFunctions.identity(),
+            UtilityFunctions.identity()
         );
         return createWithState(state, new DefaultOnAdd<T>(state));
     }
@@ -261,6 +299,42 @@ public final class ReplaySubject<T> extends Subject<T, T> {
             Action1<SubjectObserver<T>> onStart) {
         SubjectSubscriptionManager<T> ssm = new SubjectSubscriptionManager<T>();
         ssm.onStart = onStart;
+        ssm.onAdded = new Action1<SubjectObserver<T>>() {
+            @Override
+            public void call(SubjectObserver<T> o) {
+                synchronized (o) {
+                    if (!o.first || o.emitting) {
+                        return;
+                    }
+                    o.first = false;
+                    o.emitting = true;
+                }
+                boolean skipFinal = false;
+                try {
+                    for (;;) {
+                        NodeList.Node<Object> idx = o.index();
+                        NodeList.Node<Object> sidx = state.tail();
+                        if (idx != sidx) {
+                            NodeList.Node<Object> j = state.replayObserverFromIndex(idx, o);
+                            o.index(j);
+                        }
+                        synchronized (o) {
+                            if (sidx == state.tail()) {
+                                o.emitting = false;
+                                skipFinal = true;
+                                break;
+                            }
+                        }
+                    }
+                } finally {
+                    if (!skipFinal) {
+                        synchronized (o) {
+                            o.emitting = false;
+                        }
+                    }
+                }
+            }
+        };
         ssm.onTerminated = new Action1<SubjectObserver<T>>() {
 
             @Override
@@ -303,11 +377,21 @@ public final class ReplaySubject<T> extends Subject<T, T> {
     public void onError(final Throwable e) {
         if (ssm.active) {
             state.error(e);
+            List<Throwable> errors = null;
             for (SubjectObserver<? super T> o : ssm.terminate(NotificationLite.instance().error(e))) {
-                if (caughtUp(o)) {
-                    o.onError(e);
+                try {
+                    if (caughtUp(o)) {
+                        o.onError(e);
+                    }
+                } catch (Throwable e2) {
+                    if (errors == null) {
+                        errors = new ArrayList<Throwable>();
+                    }
+                    errors.add(e2);
                 }
             }
+
+            Exceptions.throwIfAny(errors);
         }
     }
     
@@ -328,11 +412,18 @@ public final class ReplaySubject<T> extends Subject<T, T> {
     /* Support test. */int subscriberCount() {
         return ssm.state.observers.length;
     }
-    
+
+    @Override
+    public boolean hasObservers() {
+        return ssm.observers().length > 0;
+    }
+
     private boolean caughtUp(SubjectObserver<? super T> o) {
         if (!o.caughtUp) {
-            o.caughtUp = true;
-            state.replayObserver(o);
+            if (state.replayObserver(o)) {
+                o.caughtUp = true;
+                o.index(null); // once caught up, no need for the index anymore
+            }
             return false;
         } else {
             // it was caught up so proceed the "raw route"
@@ -367,7 +458,7 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         public void next(T n) {
             if (!terminated) {
                 list.add(nl.next(n));
-                INDEX_UPDATER.getAndIncrement(this);
+                INDEX_UPDATER.getAndIncrement(this); // release index
             }
         }
 
@@ -380,7 +471,7 @@ public final class ReplaySubject<T> extends Subject<T, T> {
             if (!terminated) {
                 terminated = true;
                 list.add(nl.completed());
-                INDEX_UPDATER.getAndIncrement(this);
+                INDEX_UPDATER.getAndIncrement(this); // release index
             }
         }
         @Override
@@ -388,7 +479,7 @@ public final class ReplaySubject<T> extends Subject<T, T> {
             if (!terminated) {
                 terminated = true;
                 list.add(nl.error(e));
-                INDEX_UPDATER.getAndIncrement(this);
+                INDEX_UPDATER.getAndIncrement(this); // release index
             }
         }
 
@@ -398,11 +489,20 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         }
 
         @Override
-        public void replayObserver(SubjectObserver<? super T> observer) {
+        public boolean replayObserver(SubjectObserver<? super T> observer) {
+            
+            synchronized (observer) {
+                observer.first = false;
+                if (observer.emitting) {
+                    return false;
+                }
+            }
+            
             Integer lastEmittedLink = observer.index();
             if (lastEmittedLink != null) {
                 int l = replayObserverFromIndex(lastEmittedLink, observer);
                 observer.index(l);
+                return true;
             } else {
                 throw new IllegalStateException("failed to find lastEmittedLink for: " + observer);
             }
@@ -422,6 +522,57 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         @Override
         public Integer replayObserverFromIndexTest(Integer idx, SubjectObserver<? super T> observer, long now) {
             return replayObserverFromIndex(idx, observer);
+        }
+        
+        @Override
+        public int size() {
+            int idx = index; // aquire
+            if (idx > 0) {
+                Object o = list.get(idx - 1);
+                if (nl.isCompleted(o) || nl.isError(o)) {
+                    return idx - 1; // do not report a terminal event as part of size
+                }
+            }
+            return idx;
+        }
+        @Override
+        public boolean isEmpty() {
+            return size() == 0;
+        }
+        @Override
+        @SuppressWarnings("unchecked")
+        public T[] toArray(T[] a) {
+            int s = size();
+            if (s > 0) {
+                if (s > a.length) {
+                    a = (T[])Array.newInstance(a.getClass().getComponentType(), s);
+                }
+                for (int i = 0; i < s; i++) {
+                    a[i] = (T)list.get(i);
+                }
+                if (a.length > s) {
+                    a[s] = null;
+                }
+            } else
+            if (a.length > 0) {
+                a[0] = null;
+            }
+            return a;
+        }
+        @Override
+        public T latest() {
+            int idx = index;
+            if (idx > 0) {
+                Object o = list.get(idx - 1);
+                if (nl.isCompleted(o) || nl.isError(o)) {
+                    if (idx > 1) {
+                        return nl.getValue(list.get(idx - 2));
+                    }
+                    return null;
+                }
+                return nl.getValue(o);
+            }
+            return null;
         }
     }
     
@@ -459,10 +610,8 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         public void complete() {
             if (!terminated) {
                 terminated = true;
-                // don't evict the terminal value
-                evictionPolicy.evict(list);
-                // so add it later
                 list.addLast(enterTransform.call(nl.completed()));
+                evictionPolicy.evictFinal(list);
                 tail = list.tail;
             }
             
@@ -471,10 +620,9 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         public void error(Throwable e) {
             if (!terminated) {
                 terminated = true;
-                // don't evict the terminal value
-                evictionPolicy.evict(list);
-                // so add it later
                 list.addLast(enterTransform.call(nl.error(e)));
+                // don't evict the terminal value
+                evictionPolicy.evictFinal(list);
                 tail = list.tail;
             }
         }
@@ -500,10 +648,18 @@ public final class ReplaySubject<T> extends Subject<T, T> {
             return tail;
         }
         @Override
-        public void replayObserver(SubjectObserver<? super T> observer) {
+        public boolean replayObserver(SubjectObserver<? super T> observer) {
+            synchronized (observer) {
+                observer.first = false;
+                if (observer.emitting) {
+                    return false;
+                }
+            }
+            
             NodeList.Node<Object> lastEmittedLink = observer.index();
             NodeList.Node<Object> l = replayObserverFromIndex(lastEmittedLink, observer);
             observer.index(l);
+            return true;
         }
 
         @Override
@@ -529,6 +685,75 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         public boolean terminated() {
             return terminated;
         }
+        
+        @Override
+        public int size() {
+            int size = 0;
+            NodeList.Node<Object> l = head();
+            NodeList.Node<Object> next = l.next;
+            while (next != null) {
+                size++;
+                l = next;
+                next = next.next;
+            }
+            if (l.value != null) {
+                Object value = leaveTransform.call(l.value);
+                if (value != null && (nl.isError(value) || nl.isCompleted(value))) {
+                    return size - 1;
+                }
+            }
+            return size;
+        }
+        @Override
+        public boolean isEmpty() {
+            NodeList.Node<Object> l = head();
+            NodeList.Node<Object> next = l.next;
+            if (next == null) {
+                return true;
+            }
+            Object value = leaveTransform.call(next.value);
+            return nl.isError(value) || nl.isCompleted(value);
+        }
+        @Override
+        @SuppressWarnings("unchecked")
+        public T[] toArray(T[] a) {
+            List<T> list = new ArrayList<T>();
+            NodeList.Node<Object> l = head();
+            NodeList.Node<Object> next = l.next;
+            while (next != null) {
+                Object o = leaveTransform.call(next.value);
+
+                if (next.next == null && (nl.isError(o) || nl.isCompleted(o))) {
+                    break;
+                } else {
+                    list.add((T)o);
+                }
+                l = next;
+                next = next.next;
+            }
+            return list.toArray(a);
+        }
+        @Override
+        public T latest() {
+            Node<Object> h = head().next;
+            if (h == null) {
+                return null;
+            }
+            Node<Object> p = null;
+            while (h != tail()) {
+                p = h;
+                h = h.next;
+            }
+            Object value = leaveTransform.call(h.value);
+            if (nl.isError(value) || nl.isCompleted(value)) {
+                if (p != null) {
+                    value = leaveTransform.call(p.value);
+                    return nl.getValue(value);
+                }
+                return null;
+            }
+            return nl.getValue(value);
+        }
     }
     
     // **************
@@ -546,8 +771,9 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         /**
          * Replay contents to the given observer.
          * @param observer the receiver of events
+         * @return true if the subject has caught up
          */
-        void replayObserver(SubjectObserver<? super T> observer);
+        boolean replayObserver(SubjectObserver<? super T> observer);
         /**
          * Replay the buffered values from an index position and return a new index
          * @param idx the current index position
@@ -578,6 +804,28 @@ public final class ReplaySubject<T> extends Subject<T, T> {
          * Add an OnCompleted exception and terminate the subject
          */
         void complete();
+        /**
+         * @return the number of non-terminal values in the replay buffer.
+         */
+        int size();
+        /**
+         * @return true if the replay buffer is empty of non-terminal values
+         */
+        boolean isEmpty();
+        
+        /**
+         * Copy the current values (minus any terminal value) from the buffer into the array
+         * or create a new array if there isn't enough room.
+         * @param a the array to fill in
+         * @return the array or a new array containing the current values
+         */
+        T[] toArray(T[] a);
+        /**
+         * Returns the latest value that has been buffered or null if no such value
+         * present.
+         * @return the latest value buffered or null if none
+         */
+        T latest();
     }
     
     /** Interface to manage eviction checking. */
@@ -590,10 +838,16 @@ public final class ReplaySubject<T> extends Subject<T, T> {
          */
         boolean test(Object value, long now);
         /**
-         * Evict values from the list
-         * @param list 
+         * Evict values from the list.
+         * @param list the node list
          */
         void evict(NodeList<Object> list);
+        /**
+         * Evict values from the list except the very last which is considered
+         * a terminal event
+         * @param list the node list
+         */
+        void evictFinal(NodeList<Object> list);
     }
 
     
@@ -620,7 +874,14 @@ public final class ReplaySubject<T> extends Subject<T, T> {
 
         @Override
         public boolean test(Object value, long now) {
-            return true; // size gets never stale
+            return false; // size gets never stale
+        }
+        
+        @Override
+        public void evictFinal(NodeList<Object> t1) {
+            while (t1.size() > maxSize + 1) {
+                t1.removeFirst();
+            }
         }
     }
     /**
@@ -640,6 +901,19 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         public void evict(NodeList<Object> t1) {
             long now = scheduler.now();
             while (!t1.isEmpty()) {
+                NodeList.Node<Object> n = t1.head.next;
+                if (test(n.value, now)) {
+                    t1.removeFirst();
+                } else {
+                    break;
+                }
+            }
+        }
+        
+        @Override
+        public void evictFinal(NodeList<Object> t1) {
+            long now = scheduler.now();
+            while (t1.size > 1) {
                 NodeList.Node<Object> n = t1.head.next;
                 if (test(n.value, now)) {
                     t1.removeFirst();
@@ -672,6 +946,12 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         public void evict(NodeList<Object> t1) {
             first.evict(t1);
             second.evict(t1);
+        }
+        
+        @Override
+        public void evictFinal(NodeList<Object> t1) {
+            first.evictFinal(t1);
+            second.evictFinal(t1);
         }
 
         @Override
@@ -810,6 +1090,80 @@ public final class ReplaySubject<T> extends Subject<T, T> {
         @Override
         public void evict(NodeList<Object> list) {
         }
-        
+        @Override
+        public void evictFinal(NodeList<Object> list) {
+        }
     }    
+    /**
+     * Check if the Subject has terminated with an exception.
+     * @return true if the subject has received a throwable through {@code onError}.
+     */
+    @Experimental
+    @Override
+    public boolean hasThrowable() {
+        NotificationLite<T> nl = ssm.nl;
+        Object o = ssm.get();
+        return nl.isError(o);
+    }
+    /**
+     * Check if the Subject has terminated normally.
+     * @return true if the subject completed normally via {@code onCompleted}
+     */
+    @Experimental
+    @Override
+    public boolean hasCompleted() {
+        NotificationLite<T> nl = ssm.nl;
+        Object o = ssm.get();
+        return o != null && !nl.isError(o);
+    }
+    /**
+     * Returns the Throwable that terminated the Subject.
+     * @return the Throwable that terminated the Subject or {@code null} if the
+     * subject hasn't terminated yet or it terminated normally.
+     */
+    @Experimental
+    @Override
+    public Throwable getThrowable() {
+        NotificationLite<T> nl = ssm.nl;
+        Object o = ssm.get();
+        if (nl.isError(o)) {
+            return nl.getError(o);
+        }
+        return null;
+    }
+    /**
+     * Returns the current number of items (non-terminal events) available for replay.
+     * @return the number of items available
+     */
+    @Experimental
+    public int size() {
+        return state.size();
+    }
+    /**
+     * @return true if the Subject holds at least one non-terminal event available for replay
+     */
+    @Experimental
+    public boolean hasAnyValue() {
+        return !state.isEmpty();
+    }
+    @Experimental
+    @Override
+    public boolean hasValue() {
+        return hasAnyValue();
+    }
+    /**
+     * Returns a snapshot of the currently buffered non-terminal events into 
+     * the provided {@code a} array or creates a new array if it has not enough capacity.
+     * @param a the array to fill in
+     * @return the array {@code a} if it had enough capacity or a new array containing the available values 
+     */
+    @Experimental
+    @Override
+    public T[] getValues(T[] a) {
+        return state.toArray(a);
+    }
+    @Override
+    public T getValue() {
+        return state.latest();
+    }
 }

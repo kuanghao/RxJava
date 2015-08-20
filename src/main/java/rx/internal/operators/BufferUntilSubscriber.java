@@ -21,8 +21,6 @@ import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import rx.Observer;
 import rx.Subscriber;
 import rx.functions.Action0;
-import rx.observers.EmptyObserver;
-import rx.observers.Subscribers;
 import rx.subjects.Subject;
 import rx.subscriptions.Subscriptions;
 
@@ -49,10 +47,7 @@ import rx.subscriptions.Subscriptions;
  * @param <T>
  *            the type of the items to be buffered
  */
-public class BufferUntilSubscriber<T> extends Subject<T, T> {
-
-    @SuppressWarnings("rawtypes")
-    private final static Observer EMPTY_OBSERVER = new EmptyObserver();
+public final class BufferUntilSubscriber<T> extends Subject<T, T> {
 
     /**
      * @warn create() undescribed
@@ -94,6 +89,7 @@ public class BufferUntilSubscriber<T> extends Subject<T, T> {
         public void call(final Subscriber<? super T> s) {
             if (state.casObserverRef(null, s)) {
                 s.add(Subscriptions.create(new Action0() {
+                    @SuppressWarnings("unchecked")
                     @Override
                     public void call() {
                         state.observerRef = EMPTY_OBSERVER;
@@ -188,4 +184,32 @@ public class BufferUntilSubscriber<T> extends Subject<T, T> {
             emit(state.nl.next(t));
         }
     }
+
+    @Override
+    public boolean hasObservers() {
+        synchronized (state.guard) {
+            return state.observerRef != null;
+        }
+    }
+
+    @SuppressWarnings("rawtypes")
+    private final static Observer EMPTY_OBSERVER = new Observer() {
+
+        @Override
+        public void onCompleted() {
+            
+        }
+
+        @Override
+        public void onError(Throwable e) {
+            
+        }
+
+        @Override
+        public void onNext(Object t) {
+            
+        }
+        
+    };
+    
 }

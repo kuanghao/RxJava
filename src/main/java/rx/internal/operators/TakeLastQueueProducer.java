@@ -1,3 +1,18 @@
+/**
+ * Copyright 2014 Netflix, Inc.
+ * 
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * 
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * 
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 package rx.internal.operators;
 
 
@@ -40,7 +55,7 @@ final class TakeLastQueueProducer<T> implements Producer {
         if (n == Long.MAX_VALUE) {
             _c = REQUESTED_UPDATER.getAndSet(this, Long.MAX_VALUE);
         } else {
-            _c = REQUESTED_UPDATER.getAndAdd(this, n);
+            _c = BackpressureUtils.getAndAddRequest(REQUESTED_UPDATER, this, n);
         }
         if (!emittingStarted) {
             // we haven't started yet, so record what was requested and return
@@ -55,6 +70,8 @@ final class TakeLastQueueProducer<T> implements Producer {
             if (previousRequested == 0) {
                 try {
                     for (Object value : deque) {
+                        if (subscriber.isUnsubscribed())
+                            return;
                         notification.accept(subscriber, value);
                     }
                 } catch (Throwable e) {

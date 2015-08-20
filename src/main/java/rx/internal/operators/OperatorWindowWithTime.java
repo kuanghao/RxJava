@@ -1,40 +1,36 @@
- /**
-  * Copyright 2014 Netflix, Inc.
-  *
-  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
-  * use this file except in compliance with the License. You may obtain a copy of
-  * the License at
-  *
-  * http://www.apache.org/licenses/LICENSE-2.0
-  *
-  * Unless required by applicable law or agreed to in writing, software
-  * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
-  * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
-  * License for the specific language governing permissions and limitations under
-  * the License.
-  */
+/**
+ * Copyright 2014 Netflix, Inc.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License"); you may not
+ * use this file except in compliance with the License. You may obtain a copy of
+ * the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+ * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+ * License for the specific language governing permissions and limitations under
+ * the License.
+ */
 package rx.internal.operators;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.TimeUnit;
-import rx.Observable;
+
+import rx.*;
 import rx.Observable.Operator;
-import rx.Observer;
-import rx.Scheduler;
 import rx.Scheduler.Worker;
-import rx.Subscriber;
+import rx.Observable;
+import rx.Observer;
 import rx.functions.Action0;
-import rx.observers.SerializedObserver;
-import rx.observers.SerializedSubscriber;
+import rx.observers.*;
+import rx.subscriptions.Subscriptions;
 
 /**
  * Creates windows of values into the source sequence with timed window creation, length and size bounds.
- * If timespan == timeshift, windows are non-overlapping but may not be continuous if size number of items were already
- * emitted. If more items arrive after the window has reached its size bound, those items are dropped.
+ * If timespan == timeshift, windows are non-overlapping but always continuous, i.e., when the size bound is reached, a new
+ * window is opened.
  *
  * <p>Note that this conforms the Rx.NET behavior, but does not match former RxJava
  * behavior, which operated as a regular buffer and mapped its lists to Observables.</p>
@@ -62,15 +58,16 @@ public final class OperatorWindowWithTime<T> implements Operator<Observable<T>, 
     @Override
     public Subscriber<? super T> call(Subscriber<? super Observable<T>> child) {
         Worker worker = scheduler.createWorker();
-        child.add(worker);
         
         if (timespan == timeshift) {
             ExactSubscriber s = new ExactSubscriber(child, worker);
+            s.add(worker);
             s.scheduleExact();
             return s;
         }
         
         InexactSubscriber s = new InexactSubscriber(child, worker);
+        s.add(worker);
         s.startNewChunk();
         s.scheduleChunk();
         return s;
@@ -118,11 +115,19 @@ public final class OperatorWindowWithTime<T> implements Operator<Observable<T>, 
         volatile State<T> state;
         
         public ExactSubscriber(Subscriber<? super Observable<T>> child, Worker worker) {
-            super(child);
             this.child = new SerializedSubscriber<Observable<T>>(child);
             this.worker = worker;
             this.guard = new Object();
             this.state = State.empty();
+            child.add(Subscriptions.create(new Action0() {
+                @Override
+                public void call() {
+                    // if there is no active window, unsubscribe the upstream
+                    if (state.consumer == null) {
+                        unsubscribe();
+                    }
+                }
+            }));
         }
         
         @Override
@@ -132,7 +137,6 @@ public final class OperatorWindowWithTime<T> implements Operator<Observable<T>, 
         
         @Override
         public void onNext(T t) {
-            List<Object> localQueue;
             synchronized (guard) {
                 if (emitting) {
                     if (queue == null) {
@@ -141,29 +145,29 @@ public final class OperatorWindowWithTime<T> implements Operator<Observable<T>, 
                     queue.add(t);
                     return;
                 }
-                localQueue = queue;
-                queue = null;
                 emitting = true;
             }
-            boolean once = true;
             boolean skipFinal = false;
             try {
-                do {
-                    drain(localQueue);
-                    if (once) {
-                        once = false;
-                        emitValue(t);
-                    }
+                if (!emitValue(t)) {
+                    return;
+                }
+
+                for (;;) {
+                    List<Object> localQueue;
                     synchronized (guard) {
                         localQueue = queue;
-                        queue = null;
                         if (localQueue == null) {
                             emitting = false;
                             skipFinal = true;
                             return;
                         }
+                        queue = null;
                     }
-                } while (!child.isUnsubscribed());
+                    if (!drain(localQueue)) {
+                        return;
+                    }
+                }
             } finally {
                 if (!skipFinal) {
                     synchronized (guard) {
@@ -172,13 +176,15 @@ public final class OperatorWindowWithTime<T> implements Operator<Observable<T>, 
                 }
             }
         }
-        void drain(List<Object> queue) {
+        boolean drain(List<Object> queue) {
             if (queue == null) {
-                return;
+                return true;
             }
             for (Object o : queue) {
                 if (o == NEXT_SUBJECT) {
-                    replaceSubject();
+                    if (!replaceSubject()) {
+                        return false;
+                    }
                 } else
                 if (nl.isError(o)) {
                     error(nl.getError(o));
@@ -190,33 +196,46 @@ public final class OperatorWindowWithTime<T> implements Operator<Observable<T>, 
                 } else {
                     @SuppressWarnings("unchecked")
                     T t = (T)o;
-                    emitValue(t);
+                    if (!emitValue(t)) {
+                        return false;
+                    }
                 }
             }
+            return true;
         }
-        void replaceSubject() {
+        boolean replaceSubject() {
             Observer<T> s = state.consumer;
             if (s != null) {
                 s.onCompleted();
             }
+            // if child has unsubscribed, unsubscribe upstream instead of opening a new window
+            if (child.isUnsubscribed()) {
+                state = state.clear();
+                unsubscribe();
+                return false;
+            }
             BufferUntilSubscriber<T> bus = BufferUntilSubscriber.create();
             state = state.create(bus, bus);
             child.onNext(bus);
+            return true;
         }
-        void emitValue(T t) {
+        boolean emitValue(T t) {
             State<T> s = state;
-            
-            if (s.consumer != null) {
-                s.consumer.onNext(t);
-                if (s.count == size) {
-                    s.consumer.onCompleted();
-                    s = s.clear();
-                } else {
-                    s = s.next();
+            if (s.consumer == null) {
+                if (!replaceSubject()) {
+                    return false;
                 }
+                s = state;
             }
-            
+            s.consumer.onNext(t);
+            if (s.count == size - 1) {
+                s.consumer.onCompleted();
+                s = s.clear();
+            } else {
+                s = s.next();
+            }
             state = s;
+            return true;
         }
         
         @Override
@@ -285,7 +304,6 @@ public final class OperatorWindowWithTime<T> implements Operator<Observable<T>, 
             }, 0, timespan, unit);
         }
         void nextWindow() {
-            List<Object> localQueue;
             synchronized (guard) {
                 if (emitting) {
                     if (queue == null) {
@@ -294,29 +312,29 @@ public final class OperatorWindowWithTime<T> implements Operator<Observable<T>, 
                     queue.add(NEXT_SUBJECT);
                     return;
                 }
-                localQueue = queue;
-                queue = null;
                 emitting = true;
             }
-            boolean once = true;
             boolean skipFinal = false;
             try {
-                do {
-                    drain(localQueue);
-                    if (once) {
-                        once = false;
-                        replaceSubject();
-                    }
+                if (!replaceSubject()) {
+                    return;
+                }
+                for (;;) {
+                    List<Object> localQueue;
                     synchronized (guard) {
                         localQueue = queue;
-                        queue = null;
                         if (localQueue == null) {
                             emitting = false;
                             skipFinal = true;
                             return;
                         }
+                        queue = null;
                     }
-                } while (!child.isUnsubscribed());
+                    
+                    if (!drain(localQueue)) {
+                        return;
+                    }
+                }
             } finally {
                 if (!skipFinal) {
                     synchronized (guard) {

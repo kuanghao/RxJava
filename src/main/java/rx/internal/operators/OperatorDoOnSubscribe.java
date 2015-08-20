@@ -18,6 +18,7 @@ package rx.internal.operators;
 import rx.Observable.Operator;
 import rx.Subscriber;
 import rx.functions.Action0;
+import rx.observers.Subscribers;
 
 /**
  * This operator modifies an {@link rx.Observable} so a given action is invoked when the {@link rx.Observable} is subscribed.
@@ -28,7 +29,7 @@ public class OperatorDoOnSubscribe<T> implements Operator<T, T> {
 
     /**
      * Constructs an instance of the operator with the callback that gets invoked when the modified Observable is subscribed
-     * @param unsubscribe The action that gets invoked when the modified {@link rx.Observable} is subscribed
+     * @param subscribe the action that gets invoked when the modified {@link rx.Observable} is subscribed
      */
     public OperatorDoOnSubscribe(Action0 subscribe) {
         this.subscribe = subscribe;
@@ -39,6 +40,6 @@ public class OperatorDoOnSubscribe<T> implements Operator<T, T> {
         subscribe.call();
         // Pass through since this operator is for notification only, there is
         // no change to the stream whatsoever.
-        return child;
+        return Subscribers.wrap(child);
     }
 }

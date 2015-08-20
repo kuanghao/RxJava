@@ -19,11 +19,11 @@ import java.util.Iterator;
 import java.util.NoSuchElementException;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 
 import rx.Notification;
 import rx.Observable;
 import rx.Subscriber;
+import rx.Subscription;
 import rx.exceptions.Exceptions;
 
 /**
@@ -34,7 +34,10 @@ import rx.exceptions.Exceptions;
  * 
  * @see <a href="https://github.com/ReactiveX/RxJava/issues/50">Issue #50</a>
  */
-public class BlockingOperatorToIterator {
+public final class BlockingOperatorToIterator {
+    private BlockingOperatorToIterator() {
+        throw new IllegalStateException("No instances!");
+    }
 
     /**
      * Returns an iterator that iterates all values of the observable.
@@ -47,7 +50,7 @@ public class BlockingOperatorToIterator {
         final BlockingQueue<Notification<? extends T>> notifications = new LinkedBlockingQueue<Notification<? extends T>>();
 
         // using subscribe instead of unsafeSubscribe since this is a BlockingObservable "final subscribe"
-        source.materialize().subscribe(new Subscriber<Notification<? extends T>>() {
+        final Subscription subscription = source.materialize().subscribe(new Subscriber<Notification<? extends T>>() {
             @Override
             public void onCompleted() {
                 // ignore
@@ -90,8 +93,13 @@ public class BlockingOperatorToIterator {
 
             private Notification<? extends T> take() {
                 try {
+                    Notification<? extends T> poll = notifications.poll();
+                    if (poll != null) {
+                        return poll;
+                    }
                     return notifications.take();
                 } catch (InterruptedException e) {
+                    subscription.unsubscribe();
                     throw Exceptions.propagate(e);
                 }
             }

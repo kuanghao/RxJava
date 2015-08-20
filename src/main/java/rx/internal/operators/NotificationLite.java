@@ -54,6 +54,7 @@ public final class NotificationLite<T> {
     private static final Object ON_COMPLETED_SENTINEL = new Serializable() {
         private static final long serialVersionUID = 1;
         
+        @Override
         public String toString() {
             return "Notification=>Completed";
         }
@@ -62,6 +63,7 @@ public final class NotificationLite<T> {
     private static final Object ON_NEXT_NULL_SENTINEL = new Serializable() {
         private static final long serialVersionUID = 2;
         
+        @Override
         public String toString() {
             return "Notification=>NULL";
         }
@@ -75,6 +77,7 @@ public final class NotificationLite<T> {
             this.e = e;
         }
         
+        @Override
         public String toString() {
             return "Notification=>Error:" + e;
         }
@@ -173,6 +176,23 @@ public final class NotificationLite<T> {
         return n instanceof OnErrorSentinel;
     }
 
+    /**
+     * Indicates whether or not the lite notification represents a wrapped {@code null} {@code onNext} event.
+     * @param n the lite notification
+     * @return {@code true} if {@code n} represents a wrapped {@code null} {@code onNext} event, {@code false} otherwise
+     */
+    public boolean isNull(Object n) {
+        return n == ON_NEXT_NULL_SENTINEL;
+    }
+
+    /**
+     * Indicates whether or not the lite notification represents an {@code onNext} event.
+     * @param n the lite notification
+     * @return {@code true} if {@code n} represents an {@code onNext} event, {@code false} otherwise
+     */
+    public boolean isNext(Object n) {
+        return n != null && !isError(n) && !isCompleted(n);
+    }
     /**
      * Indicates which variety a particular lite notification is. If you need something more complex than
      * simply calling the right method on an {@link Observer} then you can use this method to get the

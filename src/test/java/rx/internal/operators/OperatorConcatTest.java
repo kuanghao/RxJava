@@ -16,6 +16,7 @@
 package rx.internal.operators;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
@@ -28,22 +29,20 @@ import static org.mockito.Mockito.verify;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
 
 import org.junit.Test;
 import org.mockito.InOrder;
 
-import rx.Observable;
 import rx.Observable.OnSubscribe;
-import rx.Observer;
-import rx.Subscriber;
-import rx.Subscription;
+import rx.*;
+import rx.functions.Func1;
 import rx.internal.util.RxRingBuffer;
 import rx.observers.TestSubscriber;
 import rx.schedulers.Schedulers;
 import rx.schedulers.TestScheduler;
+import rx.subjects.Subject;
 import rx.subscriptions.BooleanSubscription;
 
 public class OperatorConcatTest {
@@ -471,7 +470,7 @@ public class OperatorConcatTest {
 
             @Override
             public boolean isUnsubscribed() {
-                return subscribed;
+                return !subscribed;
             }
 
         };
@@ -695,5 +694,132 @@ public class OperatorConcatTest {
         ts.assertNoErrors();
         assertEquals((RxRingBuffer.SIZE * 4) + 20, ts.getOnNextEvents().size());
     }
+    
+    // https://github.com/ReactiveX/RxJava/issues/1818
+    @Test
+    public void testConcatWithNonCompliantSourceDoubleOnComplete() {
+        Observable<String> o = Observable.create(new OnSubscribe<String>() {
 
+            @Override
+            public void call(Subscriber<? super String> s) {
+                s.onNext("hello");
+                s.onCompleted();
+                s.onCompleted();
+            }
+            
+        });
+        
+        TestSubscriber<String> ts = new TestSubscriber<String>();
+        Observable.concat(o, o).subscribe(ts);
+        ts.awaitTerminalEvent(500, TimeUnit.MILLISECONDS);
+        ts.assertTerminalEvent();
+        ts.assertNoErrors();
+        ts.assertReceivedOnNext(Arrays.asList("hello", "hello"));
+    }
+
+    @Test(timeout = 10000)
+    public void testIssue2890NoStackoverflow() throws InterruptedException {
+        final ExecutorService executor = Executors.newFixedThreadPool(2);
+        final Scheduler sch = Schedulers.from(executor);
+
+        Func1<Integer, Observable<Integer>> func = new Func1<Integer, Observable<Integer>>() {
+            @Override
+            public Observable<Integer> call(Integer t) {
+                Observable<Integer> observable = Observable.just(t)
+                        .subscribeOn(sch)
+                ;
+                Subject<Integer, Integer> subject = BufferUntilSubscriber.create();
+                observable.subscribe(subject);
+                return subject;
+            }
+        };
+
+        int n = 5000;
+        final AtomicInteger counter = new AtomicInteger();
+
+        Observable.range(1, n).concatMap(func).subscribe(new Subscriber<Integer>() {
+            @Override
+            public void onNext(Integer t) {
+                // Consume after sleep for 1 ms
+                try {
+                    Thread.sleep(1);
+                } catch (InterruptedException e) {
+                    // ignored
+                }
+                if (counter.getAndIncrement() % 100 == 0) {
+                    System.out.print("testIssue2890NoStackoverflow -> ");
+                    System.out.println(counter.get());
+                };
+            }
+
+            @Override
+            public void onCompleted() {
+                executor.shutdown();
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                executor.shutdown();
+            }
+        });
+
+        executor.awaitTermination(12000, TimeUnit.MILLISECONDS);
+        
+        assertEquals(n, counter.get());
+    }
+    
+    @Test
+    public void testRequestOverflowDoesNotStallStream() {
+        Observable<Integer> o1 = Observable.just(1,2,3);
+        Observable<Integer> o2 = Observable.just(4,5,6);
+        final AtomicBoolean completed = new AtomicBoolean(false);
+        o1.concatWith(o2).subscribe(new Subscriber<Integer>() {
+
+            @Override
+            public void onCompleted() {
+                completed.set(true);
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                
+            }
+
+            @Override
+            public void onNext(Integer t) {
+                request(2);
+            }});
+        
+        assertTrue(completed.get());
+    }
+    
+    @Test//(timeout = 100000)
+    public void concatMapRangeAsyncLoopIssue2876() {
+        final long durationSeconds = 2;
+        final long startTime = System.currentTimeMillis();
+        for (int i = 0;; i++) {
+            //only run this for a max of ten seconds
+            if (System.currentTimeMillis()-startTime > TimeUnit.SECONDS.toMillis(durationSeconds))
+                return;
+            if (i % 1000 == 0) {
+                System.out.println("concatMapRangeAsyncLoop > " + i);
+            }
+            TestSubscriber<Integer> ts = new TestSubscriber<Integer>();
+            Observable.range(0, 1000)
+            .concatMap(new Func1<Integer, Observable<Integer>>() {
+                @Override
+                public Observable<Integer> call(Integer t) {
+                    return Observable.from(Arrays.asList(t));
+                }
+            })
+            .observeOn(Schedulers.computation()).subscribe(ts);
+
+            ts.awaitTerminalEvent(2500, TimeUnit.MILLISECONDS);
+            ts.assertTerminalEvent();
+            ts.assertNoErrors();
+            assertEquals(1000, ts.getOnNextEvents().size());
+            assertEquals((Integer)999, ts.getOnNextEvents().get(999));
+        }
+    }
+    
 }

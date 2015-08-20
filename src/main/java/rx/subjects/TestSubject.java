@@ -15,8 +15,6 @@
  */
 package rx.subjects;
 
-import java.util.concurrent.TimeUnit;
-
 import rx.Observer;
 import rx.Scheduler;
 import rx.functions.Action0;
@@ -25,9 +23,12 @@ import rx.internal.operators.NotificationLite;
 import rx.schedulers.TestScheduler;
 import rx.subjects.SubjectSubscriptionManager.SubjectObserver;
 
+import java.util.concurrent.TimeUnit;
+
 /**
  * A variety of Subject that is useful for testing purposes. It operates on a {@link TestScheduler} and allows
- * you to precisely time emissions and notifications to the Subject's subscribers.
+ * you to precisely time emissions and notifications to the Subject's subscribers using relative virtual time
+ * controlled by the {@link TestScheduler}.
  *
  * @param <T>
  *          the type of item observed by and emitted by the subject
@@ -66,9 +67,12 @@ public final class TestSubject<T> extends Subject<T, T> {
         this.innerScheduler = scheduler.createWorker();
     }
 
+    /**
+     * Schedule a call to {@code onCompleted} on TestScheduler.
+     */
     @Override
     public void onCompleted() {
-        onCompleted(innerScheduler.now());
+        onCompleted(0);
     }
 
     private void _onCompleted() {
@@ -80,13 +84,12 @@ public final class TestSubject<T> extends Subject<T, T> {
     }
 
     /**
-     * Schedule a call to the {@code onCompleted} methods of all of the subscribers to this Subject to begin at
-     * a particular time.
-     * 
-     * @param timeInMilliseconds
-     *         the time at which to begin calling the {@code onCompleted} methods of the subscribers
+     * Schedule a call to {@code onCompleted} relative to "now()" +n milliseconds in the future.
+     *
+     * @param delayTime
+     *         the number of milliseconds in the future relative to "now()" at which to call {@code onCompleted}
      */
-    public void onCompleted(long timeInMilliseconds) {
+    public void onCompleted(long delayTime) {
         innerScheduler.schedule(new Action0() {
 
             @Override
@@ -94,12 +97,15 @@ public final class TestSubject<T> extends Subject<T, T> {
                 _onCompleted();
             }
 
-        }, timeInMilliseconds, TimeUnit.MILLISECONDS);
+        }, delayTime, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Schedule a call to {@code onError} on TestScheduler.
+     */
     @Override
     public void onError(final Throwable e) {
-        onError(e, innerScheduler.now());
+        onError(e, 0);
     }
 
     private void _onError(final Throwable e) {
@@ -111,15 +117,14 @@ public final class TestSubject<T> extends Subject<T, T> {
     }
 
     /**
-     * Schedule a call to the {@code onError} methods of all of the subscribers to this Subject to begin at
-     * a particular time.
-     * 
+     * Schedule a call to {@code onError} relative to "now()" +n milliseconds in the future.
+     *
      * @param e
-     *         the {@code Throwable} to pass to the {@code onError} methods of the subscribers
-     * @param timeInMilliseconds
-     *         the time at which to begin calling the {@code onError} methods of the subscribers
+     *         the {@code Throwable} to pass to the {@code onError} method
+     * @param dalayTime
+     *         the number of milliseconds in the future relative to "now()" at which to call {@code onError}
      */
-    public void onError(final Throwable e, long timeInMilliseconds) {
+    public void onError(final Throwable e, long dalayTime) {
         innerScheduler.schedule(new Action0() {
 
             @Override
@@ -127,12 +132,15 @@ public final class TestSubject<T> extends Subject<T, T> {
                 _onError(e);
             }
 
-        }, timeInMilliseconds, TimeUnit.MILLISECONDS);
+        }, dalayTime, TimeUnit.MILLISECONDS);
     }
 
+    /**
+     * Schedule a call to {@code onNext} on TestScheduler.
+     */
     @Override
     public void onNext(T v) {
-        onNext(v, innerScheduler.now());
+        onNext(v, 0);
     }
 
     private void _onNext(T v) {
@@ -142,15 +150,14 @@ public final class TestSubject<T> extends Subject<T, T> {
     }
 
     /**
-     * Emit an item to all of the subscribers to this Subject at a particular time.
-     * 
+     * Schedule a call to {@code onNext} relative to "now()" +n milliseconds in the future.
+     *
      * @param v
      *         the item to emit
-     * @param timeInMilliseconds
-     *         the time at which to begin calling the {@code onNext} methods of the subscribers in order to emit
-     *         the item
+     * @param delayTime
+     *         the number of milliseconds in the future relative to "now()" at which to call {@code onNext}
      */
-    public void onNext(final T v, long timeInMilliseconds) {
+    public void onNext(final T v, long delayTime) {
         innerScheduler.schedule(new Action0() {
 
             @Override
@@ -158,6 +165,11 @@ public final class TestSubject<T> extends Subject<T, T> {
                 _onNext(v);
             }
 
-        }, timeInMilliseconds, TimeUnit.MILLISECONDS);
+        }, delayTime, TimeUnit.MILLISECONDS);
+    }
+
+    @Override
+    public boolean hasObservers() {
+        return state.observers().length > 0;
     }
 }

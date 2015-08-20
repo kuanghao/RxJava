@@ -557,7 +557,7 @@ public class OperatorBufferTest {
     }
     @Test(timeout = 2000)
     public void bufferWithTimeTake1() {
-        Observable<Long> source = Observable.timer(40, 40, TimeUnit.MILLISECONDS, scheduler);
+        Observable<Long> source = Observable.interval(40, 40, TimeUnit.MILLISECONDS, scheduler);
         
         Observable<List<Long>> result = source.buffer(100, TimeUnit.MILLISECONDS, scheduler).take(1);
         
@@ -574,7 +574,7 @@ public class OperatorBufferTest {
     }
     @Test(timeout = 2000)
     public void bufferWithTimeSkipTake2() {
-        Observable<Long> source = Observable.timer(40, 40, TimeUnit.MILLISECONDS, scheduler);
+        Observable<Long> source = Observable.interval(40, 40, TimeUnit.MILLISECONDS, scheduler);
         
         Observable<List<Long>> result = source.buffer(100, 60, TimeUnit.MILLISECONDS, scheduler).take(2);
         
@@ -593,8 +593,8 @@ public class OperatorBufferTest {
     }
     @Test(timeout = 2000)
     public void bufferWithBoundaryTake2() {
-        Observable<Long> boundary = Observable.timer(60, 60, TimeUnit.MILLISECONDS, scheduler);
-        Observable<Long> source = Observable.timer(40, 40, TimeUnit.MILLISECONDS, scheduler);
+        Observable<Long> boundary = Observable.interval(60, 60, TimeUnit.MILLISECONDS, scheduler);
+        Observable<Long> source = Observable.interval(40, 40, TimeUnit.MILLISECONDS, scheduler);
         
         Observable<List<Long>> result = source.buffer(boundary).take(2);
         
@@ -615,15 +615,15 @@ public class OperatorBufferTest {
     
     @Test(timeout = 2000)
     public void bufferWithStartEndBoundaryTake2() {
-        Observable<Long> start = Observable.timer(61, 61, TimeUnit.MILLISECONDS, scheduler);
+        Observable<Long> start = Observable.interval(61, 61, TimeUnit.MILLISECONDS, scheduler);
         Func1<Long, Observable<Long>> end = new Func1<Long, Observable<Long>>() {
             @Override
             public Observable<Long> call(Long t1) {
-                return Observable.timer(100, 100, TimeUnit.MILLISECONDS, scheduler);
+                return Observable.interval(100, 100, TimeUnit.MILLISECONDS, scheduler);
             }
         };
         
-        Observable<Long> source = Observable.timer(40, 40, TimeUnit.MILLISECONDS, scheduler);
+        Observable<Long> source = Observable.interval(40, 40, TimeUnit.MILLISECONDS, scheduler);
         
         Observable<List<Long>> result = source.buffer(start, end).take(2);
         
@@ -693,7 +693,7 @@ public class OperatorBufferTest {
     }
     @Test
     public void bufferWithTimeAndSize() {
-        Observable<Long> source = Observable.timer(30, 30, TimeUnit.MILLISECONDS, scheduler);
+        Observable<Long> source = Observable.interval(30, 30, TimeUnit.MILLISECONDS, scheduler);
         
         Observable<List<Long>> result = source.buffer(100, TimeUnit.MILLISECONDS, 2, scheduler).take(3);
         
@@ -980,5 +980,39 @@ public class OperatorBufferTest {
 
         });
         assertEquals(Long.MAX_VALUE, requested.get());
+    }
+    @Test(timeout = 3000)
+    public void testBufferWithTimeDoesntUnsubscribeDownstream() throws InterruptedException {
+        @SuppressWarnings("unchecked")
+        final Observer<Object> o = mock(Observer.class);
+        
+        
+        final CountDownLatch cdl = new CountDownLatch(1);
+        Subscriber<Object> s = new Subscriber<Object>() {
+            @Override
+            public void onNext(Object t) {
+                o.onNext(t);
+            }
+            @Override
+            public void onError(Throwable e) {
+                o.onError(e);
+                cdl.countDown();
+            }
+            @Override
+            public void onCompleted() {
+                o.onCompleted();
+                cdl.countDown();
+            }
+        };
+        
+        Observable.range(1, 1).delay(1, TimeUnit.SECONDS).buffer(2, TimeUnit.SECONDS).unsafeSubscribe(s);
+        
+        cdl.await();
+        
+        verify(o).onNext(Arrays.asList(1));
+        verify(o).onCompleted();
+        verify(o, never()).onError(any(Throwable.class));
+        
+        assertFalse(s.isUnsubscribed());
     }
 }

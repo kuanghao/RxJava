@@ -15,16 +15,13 @@
  */
 package rx.internal.operators;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import rx.Observable;
+import java.util.*;
+
+import rx.*;
 import rx.Observable.Operator;
+import rx.Observable;
 import rx.Observer;
-import rx.Subscriber;
-import rx.functions.Func0;
 import rx.observers.SerializedSubscriber;
-import rx.observers.Subscribers;
 
 /**
  * Creates non-overlapping windows of items where each window is terminated by
@@ -34,35 +31,20 @@ import rx.observers.Subscribers;
  * @param <U> the boundary value type
  */
 public final class OperatorWindowWithObservable<T, U> implements Operator<Observable<T>, T> {
-    final Func0<? extends Observable<? extends U>> otherFactory;
+    final Observable<U> other;
 
-    public OperatorWindowWithObservable(Func0<? extends Observable<? extends U>> otherFactory) {
-        this.otherFactory = otherFactory;
-    }
     public OperatorWindowWithObservable(final Observable<U> other) {
-        this.otherFactory = new Func0<Observable<U>>() {
-
-            @Override
-            public Observable<U> call() {
-                return other;
-            }
-            
-        };
+        this.other = other;
     }
     
     @Override
     public Subscriber<? super T> call(Subscriber<? super Observable<T>> child) {
         
-        Observable<? extends U> other;
-        try {
-            other = otherFactory.call();
-        } catch (Throwable e) {
-            child.onError(e);
-            return Subscribers.empty();
-        }
-        
         SourceSubscriber<T> sub = new SourceSubscriber<T>(child);
         BoundarySubscriber<T, U> bs = new BoundarySubscriber<T, U>(child, sub);
+        
+        child.add(sub);
+        child.add(bs);
         
         sub.replaceWindow();
         
@@ -88,7 +70,6 @@ public final class OperatorWindowWithObservable<T, U> implements Operator<Observ
         List<Object> queue;
         
         public SourceSubscriber(Subscriber<? super Observable<T>> child) {
-            super(child);
             this.child = new SerializedSubscriber<Observable<T>>(child);
             this.guard = new Object();
         }
@@ -119,7 +100,7 @@ public final class OperatorWindowWithObservable<T, U> implements Operator<Observ
                 do {
                     drain(localQueue);
                     if (once) {
-                        once = true;
+                        once = false;
                         emitValue(t);
                     }
                     
@@ -288,7 +269,6 @@ public final class OperatorWindowWithObservable<T, U> implements Operator<Observ
     static final class BoundarySubscriber<T, U> extends Subscriber<U> {
         final SourceSubscriber<T> sub;
         public BoundarySubscriber(Subscriber<?> child, SourceSubscriber<T> sub) {
-            super(child);
             this.sub = sub;
         }
         

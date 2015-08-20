@@ -96,13 +96,14 @@ public final class BlockingOperatorLatest {
                     try {
                         notify.acquire();
                     } catch (InterruptedException ex) {
+                        unsubscribe();
                         Thread.currentThread().interrupt();
                         iNotif = Notification.createOnError(ex);
                         throw Exceptions.propagate(ex);
                     }
 
                     @SuppressWarnings("unchecked")
-                    Notification<? extends T> n = (Notification<? extends T>)REFERENCE_UPDATER.getAndSet(this, null);
+                    Notification<? extends T> n = REFERENCE_UPDATER.getAndSet(this, null);
                     iNotif = n;
                     if (iNotif.isOnError()) {
                         throw Exceptions.propagate(iNotif.getThrowable());

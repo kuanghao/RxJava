@@ -23,7 +23,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.Test;
 import org.mockito.InOrder;
@@ -32,8 +35,8 @@ import rx.Observable;
 import rx.Observer;
 import rx.Subscriber;
 import rx.functions.Func1;
-import rx.functions.Functions;
 import rx.internal.util.RxRingBuffer;
+import rx.internal.util.UtilityFunctions;
 import rx.observers.TestSubscriber;
 import rx.schedulers.Schedulers;
 
@@ -156,7 +159,7 @@ public class OperatorTakeLastTest {
         assertEquals(0, Observable
                 .empty()
                 .count()
-                .filter(Functions.alwaysFalse())
+                .filter(UtilityFunctions.alwaysFalse())
                 .toList()
                 .toBlocking().single().size());
     }
@@ -263,5 +266,61 @@ public class OperatorTakeLastTest {
                 request(1);
             }
         });
+    }
+    
+    @Test
+    public void testUnsubscribeTakesEffectEarlyOnFastPath() {
+        final AtomicInteger count = new AtomicInteger();
+        Observable.range(0, 100000).takeLast(100000).subscribe(new Subscriber<Integer>() {
+
+            @Override
+            public void onStart() {
+                request(Long.MAX_VALUE);
+            }
+
+            @Override
+            public void onCompleted() {
+
+            }
+
+            @Override
+            public void onError(Throwable e) {
+            }
+
+            @Override
+            public void onNext(Integer integer) {
+                count.incrementAndGet();
+                unsubscribe();
+            }
+        });
+        assertEquals(1,count.get());
+    }
+    
+    @Test(timeout=10000)
+    public void testRequestOverflow() {
+        final List<Integer> list = new ArrayList<Integer>();
+        Observable.range(1, 100).takeLast(50).subscribe(new Subscriber<Integer>() {
+
+            @Override
+            public void onStart() {
+                request(2);
+            }
+            
+            @Override
+            public void onCompleted() {
+                
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                
+            }
+
+            @Override
+            public void onNext(Integer t) {
+                list.add(t);
+                request(Long.MAX_VALUE-1);
+            }});
+        assertEquals(50, list.size());
     }
 }

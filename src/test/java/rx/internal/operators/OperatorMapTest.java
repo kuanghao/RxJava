@@ -191,6 +191,7 @@ public class OperatorMapTest {
     public void testMapWithIssue417() {
         Observable.just(1).observeOn(Schedulers.computation())
                 .map(new Func1<Integer, Integer>() {
+                    @Override
                     public Integer call(Integer arg0) {
                         throw new IllegalArgumentException("any error");
                     }
@@ -205,6 +206,7 @@ public class OperatorMapTest {
         Observable<String> m = Observable.just("one")
                 .observeOn(Schedulers.computation())
                 .map(new Func1<String, String>() {
+                    @Override
                     public String call(String arg0) {
                         throw new IllegalArgumentException("any error");
                     }
@@ -316,5 +318,25 @@ public class OperatorMapTest {
         m.put("firstName", prefix + "First");
         m.put("lastName", prefix + "Last");
         return m;
+    }
+
+    @Test(expected = OnErrorNotImplementedException.class)
+    public void testShouldNotSwallowOnErrorNotImplementedException() {
+        Observable.just("a", "b").flatMap(new Func1<String, Observable<String>>() {
+            @Override
+            public Observable<String> call(String s) {
+                return Observable.just(s + "1", s + "2");
+            }
+        }).flatMap(new Func1<String, Observable<String>>() {
+            @Override
+            public Observable<String> call(String s) {
+                return Observable.error(new Exception("test"));
+            }
+        }).forEach(new Action1<String>() {
+            @Override
+            public void call(String s) {
+                System.out.println(s);
+            }
+        });
     }
 }

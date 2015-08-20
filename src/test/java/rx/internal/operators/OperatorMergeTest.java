@@ -16,40 +16,26 @@
 package rx.internal.operators;
 
 import static java.util.Arrays.asList;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 import static org.mockito.Matchers.any;
-import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.*;
 
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Iterator;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
 
-import org.junit.Before;
-import org.junit.Test;
-import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.junit.*;
+import org.mockito.*;
 
 import rx.*;
 import rx.Observable.OnSubscribe;
 import rx.Scheduler.Worker;
-import rx.functions.Action0;
-import rx.functions.Action1;
-import rx.functions.Func1;
+import rx.Observable;
+import rx.Observer;
+import rx.functions.*;
 import rx.internal.util.RxRingBuffer;
 import rx.observers.TestSubscriber;
-import rx.schedulers.Schedulers;
-import rx.schedulers.TestScheduler;
+import rx.schedulers.*;
 import rx.subscriptions.Subscriptions;
 
 public class OperatorMergeTest {
@@ -488,7 +474,7 @@ public class OperatorMergeTest {
         });
     }
 
-    @Test
+    @Test//(timeout = 10000)
     public void testConcurrency() {
         Observable<Integer> o = Observable.range(1, 10000).subscribeOn(Schedulers.newThread());
 
@@ -497,7 +483,8 @@ public class OperatorMergeTest {
             TestSubscriber<Integer> ts = new TestSubscriber<Integer>();
             merge.subscribe(ts);
 
-            ts.awaitTerminalEvent();
+            ts.awaitTerminalEvent(3, TimeUnit.SECONDS);
+            ts.assertTerminalEvent();
             ts.assertNoErrors();
             assertEquals(1, ts.getOnCompletedEvents().size());
             List<Integer> onNextEvents = ts.getOnNextEvents();
@@ -623,6 +610,16 @@ public class OperatorMergeTest {
     }
 
     @Test
+    public void testBackpressureUpstream2InLoop() throws InterruptedException {
+        for (int i = 0; i < 1000; i++) {
+            System.err.flush();
+            System.out.println("---");
+            System.out.flush();
+            testBackpressureUpstream2();
+        }
+    }
+    
+    @Test
     public void testBackpressureUpstream2() throws InterruptedException {
         final AtomicInteger generated1 = new AtomicInteger();
         Observable<Integer> o1 = createInfiniteObservable(generated1).subscribeOn(Schedulers.computation());
@@ -630,21 +627,24 @@ public class OperatorMergeTest {
         TestSubscriber<Integer> testSubscriber = new TestSubscriber<Integer>() {
             @Override
             public void onNext(Integer t) {
-                System.err.println("testSubscriber received => " + t + "  on thread " + Thread.currentThread());
                 super.onNext(t);
             }
         };
 
         Observable.merge(o1.take(RxRingBuffer.SIZE * 2), Observable.just(-99)).subscribe(testSubscriber);
         testSubscriber.awaitTerminalEvent();
+        
+        List<Integer> onNextEvents = testSubscriber.getOnNextEvents();
+        
+        System.out.println("Generated 1: " + generated1.get() + " / received: " + onNextEvents.size());
+        System.out.println(onNextEvents);
+
         if (testSubscriber.getOnErrorEvents().size() > 0) {
             testSubscriber.getOnErrorEvents().get(0).printStackTrace();
         }
         testSubscriber.assertNoErrors();
-        System.err.println(testSubscriber.getOnNextEvents());
-        assertEquals(RxRingBuffer.SIZE * 2 + 1, testSubscriber.getOnNextEvents().size());
+        assertEquals(RxRingBuffer.SIZE * 2 + 1, onNextEvents.size());
         // it should be between the take num and requested batch size across the async boundary
-        System.out.println("Generated 1: " + generated1.get());
         assertTrue(generated1.get() >= RxRingBuffer.SIZE * 2 && generated1.get() <= RxRingBuffer.SIZE * 3);
     }
 
@@ -653,7 +653,7 @@ public class OperatorMergeTest {
      * 
      * This requires merge to also obey the Product.request values coming from it's child subscriber.
      */
-    @Test
+    @Test(timeout = 10000)
     public void testBackpressureDownstreamWithConcurrentStreams() throws InterruptedException {
         final AtomicInteger generated1 = new AtomicInteger();
         Observable<Integer> o1 = createInfiniteObservable(generated1).subscribeOn(Schedulers.computation());
@@ -1036,8 +1036,9 @@ public class OperatorMergeTest {
         assertEquals(Collections.<Notification<Long>>emptyList(), subscriber.getOnCompletedEvents());
         subscriber.requestMore(1);
         subscriber.assertReceivedOnNext(asList(1L));
-        assertEquals(Collections.<Notification<Long>>emptyList(), subscriber.getOnCompletedEvents());
-        subscriber.requestMore(1);
+// TODO: it should be acceptable to get a completion event without requests
+//        assertEquals(Collections.<Notification<Long>>emptyList(), subscriber.getOnCompletedEvents());
+//        subscriber.requestMore(1);
         subscriber.assertTerminalEvent();
     }
 
@@ -1104,5 +1105,202 @@ public class OperatorMergeTest {
         subscriber.requestMore(2);
         subscriber.assertReceivedOnNext(asList(1, 2, 3, 4));
         assertEquals(asList(exception), subscriber.getOnErrorEvents());
+    }
+    
+    @Test
+    public void testMergeKeepsRequesting() throws InterruptedException {
+        //for (int i = 0; i < 5000; i++) {
+            //System.out.println(i + ".......................................................................");
+            final CountDownLatch latch = new CountDownLatch(1);
+            final ConcurrentLinkedQueue<String> messages = new ConcurrentLinkedQueue<String>();
+
+            Observable.range(1, 2)
+                    // produce many integers per second
+                    .flatMap(new Func1<Integer, Observable<Integer>>() {
+                        @Override
+                        public Observable<Integer> call(final Integer number) {
+                            return Observable.range(1, Integer.MAX_VALUE)
+                                    .doOnRequest(new Action1<Long>() {
+
+                                        @Override
+                                        public void call(Long n) {
+                                            messages.add(">>>>>>>> A requested[" + number + "]: " + n);
+                                        }
+
+                                    })
+                                    // pause a bit
+                                    .doOnNext(pauseForMs(3))
+                                    // buffer on backpressure
+                                    .onBackpressureBuffer()
+                                    // do in parallel
+                                    .subscribeOn(Schedulers.computation())
+                                    .doOnRequest(new Action1<Long>() {
+
+                                        @Override
+                                        public void call(Long n) {
+                                            messages.add(">>>>>>>> B requested[" + number + "]: " + n);
+                                        }
+
+                                    });
+                        }
+
+                    })
+                    // take a number bigger than 2* RxRingBuffer.SIZE (used by OperatorMerge)
+                    .take(RxRingBuffer.SIZE * 2 + 1)
+                    // log count
+                    .doOnNext(printCount())
+                    // release latch
+                    .doOnCompleted(new Action0() {
+                        @Override
+                        public void call() {
+                            latch.countDown();
+                        }
+                    }).subscribe();
+            boolean a = latch.await(2, TimeUnit.SECONDS);
+            if (!a) {
+                for (String s : messages) {
+                    System.out.println("DEBUG => " + s);
+                }
+            }
+            assertTrue(a);
+        //}
+    }
+    
+    @Test
+    public void testMergeRequestOverflow() throws InterruptedException {
+        //do a non-trivial merge so that future optimisations with EMPTY don't invalidate this test
+        Observable<Integer> o = Observable.from(Arrays.asList(1,2)).mergeWith(Observable.from(Arrays.asList(3,4)));
+        final int expectedCount = 4;
+        final CountDownLatch latch = new CountDownLatch(expectedCount);
+        o.subscribeOn(Schedulers.computation()).subscribe(new Subscriber<Integer>() {
+            
+            @Override
+            public void onStart() {
+                request(1);
+            }
+
+            @Override
+            public void onCompleted() {
+                //ignore
+            }
+
+            @Override
+            public void onError(Throwable e) {
+                throw new RuntimeException(e);
+            }
+
+            @Override
+            public void onNext(Integer t) {
+                latch.countDown();
+                request(2);
+                request(Long.MAX_VALUE-1);
+            }});
+        assertTrue(latch.await(10, TimeUnit.SECONDS));
+    }
+
+    private static Action1<Integer> printCount() {
+        return new Action1<Integer>() {
+            long count;
+
+            @Override
+            public void call(Integer t1) {
+                count++;
+                System.out.println("count=" + count);
+            }
+        };
+    }
+
+    private static Action1<Integer> pauseForMs(final long time) {
+        return new Action1<Integer>() {
+            @Override
+            public void call(Integer s) {
+                try {
+                    Thread.sleep(time);
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        };
+    }
+    
+    Func1<Integer, Observable<Integer>> toScalar = new Func1<Integer, Observable<Integer>>() {
+        @Override
+        public Observable<Integer> call(Integer t) {
+            return Observable.just(t);
+        }
+    };
+    Func1<Integer, Observable<Integer>> toHiddenScalar = new Func1<Integer, Observable<Integer>>() {
+        @Override
+        public Observable<Integer> call(Integer t) {
+            return Observable.just(t).asObservable();
+        }
+    };
+    
+    void runMerge(Func1<Integer, Observable<Integer>> func, TestSubscriber<Integer> ts) {
+        List<Integer> list = new ArrayList<Integer>();
+        for (int i = 0; i < 1000; i++) {
+            list.add(i);
+        }
+        Observable<Integer> source = Observable.from(list);
+        source.flatMap(func).subscribe(ts);
+        
+        if (ts.getOnNextEvents().size() != 1000) {
+            System.out.println(ts.getOnNextEvents());
+        }
+        
+        ts.assertTerminalEvent();
+        ts.assertNoErrors();
+        ts.assertReceivedOnNext(list);
+    }
+    
+    @Test
+    public void testFastMergeFullScalar() {
+        runMerge(toScalar, new TestSubscriber<Integer>());
+    }
+    @Test
+    public void testFastMergeHiddenScalar() {
+        runMerge(toHiddenScalar, new TestSubscriber<Integer>());
+    }
+    @Test
+    public void testSlowMergeFullScalar() {
+        for (final int req : new int[] { 16, 32, 64, 128, 256 }) {
+            TestSubscriber<Integer> ts = new TestSubscriber<Integer>() {
+                int remaining = req;
+                @Override
+                public void onStart() {
+                    request(req);
+                }
+                @Override
+                public void onNext(Integer t) {
+                    super.onNext(t);
+                    if (--remaining == 0) {
+                        remaining = req;
+                        request(req);
+                    }
+                }
+            };
+            runMerge(toScalar, ts);
+        }
+    }
+    @Test
+    public void testSlowMergeHiddenScalar() {
+        for (final int req : new int[] { 16, 32, 64, 128, 256 }) {
+            TestSubscriber<Integer> ts = new TestSubscriber<Integer>() {
+                int remaining = req;
+                @Override
+                public void onStart() {
+                    request(req);
+                }
+                @Override
+                public void onNext(Integer t) {
+                    super.onNext(t);
+                    if (--remaining == 0) {
+                        remaining = req;
+                        request(req);
+                    }
+                }
+            };
+            runMerge(toHiddenScalar, ts);
+        }
     }
 }

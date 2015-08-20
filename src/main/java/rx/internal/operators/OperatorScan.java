@@ -20,7 +20,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import rx.Observable.Operator;
 import rx.Producer;
 import rx.Subscriber;
+import rx.exceptions.Exceptions;
 import rx.exceptions.OnErrorThrowable;
+import rx.functions.Func0;
 import rx.functions.Func2;
 
 /**
@@ -38,7 +40,7 @@ import rx.functions.Func2;
  */
 public final class OperatorScan<R, T> implements Operator<R, T> {
 
-    private final R initialValue;
+    private final Func0<R> initialValueFactory;
     private final Func2<R, ? super T, R> accumulator;
     // sentinel if we don't receive an initial value
     private static final Object NO_INITIAL_VALUE = new Object();
@@ -54,8 +56,19 @@ public final class OperatorScan<R, T> implements Operator<R, T> {
      * @see <a href="http://msdn.microsoft.com/en-us/library/hh212007.aspx">Observable.Scan(TSource, TAccumulate) Method (IObservable(TSource), TAccumulate, Func(TAccumulate, TSource,
      *      TAccumulate))</a>
      */
-    public OperatorScan(R initialValue, Func2<R, ? super T, R> accumulator) {
-        this.initialValue = initialValue;
+    public OperatorScan(final R initialValue, Func2<R, ? super T, R> accumulator) {
+        this(new Func0<R>() {
+
+            @Override
+            public R call() {
+                return initialValue;
+            }
+            
+        }, accumulator);
+    }
+    
+    public OperatorScan(Func0<R> initialValueFactory, Func2<R, ? super T, R> accumulator) {
+        this.initialValueFactory = initialValueFactory;
         this.accumulator = accumulator;
     }
 
@@ -75,6 +88,7 @@ public final class OperatorScan<R, T> implements Operator<R, T> {
     @Override
     public Subscriber<? super T> call(final Subscriber<? super R> child) {
         return new Subscriber<T>(child) {
+            private final R initialValue = initialValueFactory.call();
             private R value = initialValue;
             boolean initialized = false;
 
@@ -90,7 +104,9 @@ public final class OperatorScan<R, T> implements Operator<R, T> {
                     try {
                         this.value = accumulator.call(this.value, currentValue);
                     } catch (Throwable e) {
+                        Exceptions.throwIfFatal(e);
                         child.onError(OnErrorThrowable.addValueAsLastCause(e, currentValue));
+                        return;
                     }
                 }
                 child.onNext(this.value);
@@ -126,17 +142,28 @@ public final class OperatorScan<R, T> implements Operator<R, T> {
 
                     final AtomicBoolean once = new AtomicBoolean();
 
+                    final AtomicBoolean excessive = new AtomicBoolean();
+
                     @Override
                     public void request(long n) {
                         if (once.compareAndSet(false, true)) {
                             if (initialValue == NO_INITIAL_VALUE || n == Long.MAX_VALUE) {
                                 producer.request(n);
+                            } else if (n == 1) {
+                                excessive.set(true);
+                                producer.request(1); // request at least 1
                             } else {
+                                // n != Long.MAX_VALUE && n != 1
                                 producer.request(n - 1);
                             }
                         } else {
                             // pass-thru after first time
-                            producer.request(n);
+                            if (n > 1 // avoid to request 0
+                                    && excessive.compareAndSet(true, false) && n != Long.MAX_VALUE) {
+                                producer.request(n - 1);
+                            } else {
+                                producer.request(n);
+                            }
                         }
                     }
                 });

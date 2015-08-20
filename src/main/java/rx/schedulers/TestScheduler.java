@@ -34,7 +34,7 @@ public class TestScheduler extends Scheduler {
     private final Queue<TimedAction> queue = new PriorityQueue<TimedAction>(11, new CompareActionsByTime());
     private static long counter = 0;
 
-    private static class TimedAction {
+    private static final class TimedAction {
 
         private final long time;
         private final Action0 action;
@@ -111,7 +111,8 @@ public class TestScheduler extends Scheduler {
             if (current.time > targetTimeInNanos) {
                 break;
             }
-            time = current.time;
+            // if scheduled time is 0 (immediate) use current virtual time
+            time = current.time == 0 ? time : current.time;
             queue.remove();
 
             // Only execute if not unsubscribed
@@ -129,7 +130,7 @@ public class TestScheduler extends Scheduler {
 
     private final class InnerTestScheduler extends Worker {
 
-        private BooleanSubscription s = new BooleanSubscription();
+        private final BooleanSubscription s = new BooleanSubscription();
 
         @Override
         public void unsubscribe() {

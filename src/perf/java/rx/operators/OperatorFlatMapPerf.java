@@ -17,8 +17,8 @@ package rx.operators;
 
 import java.util.concurrent.TimeUnit;
 
-import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Benchmark;
+import org.openjdk.jmh.annotations.BenchmarkMode;
 import org.openjdk.jmh.annotations.Mode;
 import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Param;
@@ -28,6 +28,7 @@ import org.openjdk.jmh.annotations.State;
 import rx.Observable;
 import rx.functions.Func1;
 import rx.jmh.InputWithIncrementingInteger;
+import rx.jmh.LatchedObserver;
 import rx.schedulers.Schedulers;
 
 @BenchmarkMode(Mode.Throughput)
@@ -62,6 +63,7 @@ public class OperatorFlatMapPerf {
 
     @Benchmark
     public void flatMapIntPassthruAsync(Input input) throws InterruptedException {
+        LatchedObserver<Integer> latchedObserver = input.newLatchedObserver();
         input.observable.flatMap(new Func1<Integer, Observable<Integer>>() {
 
             @Override
@@ -69,7 +71,8 @@ public class OperatorFlatMapPerf {
                 return Observable.just(i).subscribeOn(Schedulers.computation());
             }
 
-        }).subscribe(input.observer);
+        }).subscribe(latchedObserver);
+        latchedObserver.latch.await();
     }
 
     @Benchmark
